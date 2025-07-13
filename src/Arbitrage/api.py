@@ -1,0 +1,1 @@
+# access various APIs and compound similar markets in some sort of list

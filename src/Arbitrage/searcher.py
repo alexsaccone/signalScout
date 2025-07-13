@@ -1,0 +1,1 @@
+# comb through the list of markets and determine if arbitrage opportunities exist
