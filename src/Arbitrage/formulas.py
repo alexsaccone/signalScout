@@ -4,7 +4,7 @@ def arbitrage_pct(odds1: float, odds2: float):
 
 # Takes in an arbitrage percetnage and returns the guaranteed profit returns as a percetage
 def profit_pct(p: float):
-    return 1.0 - p
+    return (1.0 - p)/p
 
 # Takes in the decimal odds of two bets and returns a tuple of the percentages of the total investment that should be placed in each
 def get_stakes(odds1: float, odds2: float):
