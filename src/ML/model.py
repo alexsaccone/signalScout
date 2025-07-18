@@ -9,6 +9,7 @@ from sklearn.preprocessing import StandardScaler
 
 data = pd.read_csv('sports.csv')
 qualifier = 'result' #Whatever works ig
+#Currently works for easy qualifiers such as win/loss binary. 
 x = data.drop(qualifier, axis = 1).values
 y = data[qualifier].values
 
@@ -21,14 +22,15 @@ x_train, x_test, y_train, y_test = x[:train_split], x[train_split:], y[:train_sp
 model = tf.keras.models.Sequential([
   tf.keras.layers.Dense(64, activation='relu'),
   tf.keras.layers.Dropout(0.3),
-  tf.keras.layers.Dense(32, activation='softmax'),
+  tf.keras.layers.Dense(32, activation='relu'),
   tf.keras.layers.Dropout(0.2),
-  tf.keras.layers.Dense(2, activation="relu")
+  #If we use complicated data, we do regression
+  tf.keras.layers.Dense(1)
 ])
 
 model.compile(optimizer='adam',
   loss='sparse_categorical_crossentropy',
-  metrics=['accuracy'])
+  metrics=['mae'])
 
 model.fit(x_train, y_train, epochs = 25, batch_size = 32, validation_split = 0.1)
 test_loss, test_accuracy = model.evaluate(x_test, y_test)
