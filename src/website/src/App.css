@@ -1,0 +1,42 @@
+body{
+  background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: sans-serif;
+}
+.App{
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  min-height:100vh;
+  flex-direction:column;
+}
+
+
+
+.pie-chart {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pie-center {
+  width: 100px;
+  height: 100px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 1.5rem;
+  color: black;
+}
