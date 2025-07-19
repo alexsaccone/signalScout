@@ -2,6 +2,7 @@
 
 import requests
 from tqdm import tqdm
+import json
 
 headers = {"accept": "application/json"}
 
@@ -46,8 +47,49 @@ def more_kalshi():
 
 
 #Polymarket
-p_url = "https://gamma-api.polymarket.com/events"
-polymarket = requests.request("GET", p_url)
+p_url = "https://gamma-api.polymarket.com/markets"
+
+def mini_poly():
+    polymarket = requests.request("GET", p_url)
+    return polymarket.text
+
+def more_poly():
+    cursor = None
+    events = []
+    pages = 10  # adjust based on how much polymarket you want
+    with tqdm(desc="fetch-poly") as bar:
+        for _ in range(pages):
+            params = dict(limit=200)
+            if cursor:
+                params["cursor"] = cursor
+
+            response = requests.get(p_url, params=params)
+            if response.status_code != 200:
+                print(f"poly error: {response.status_code}")
+                break
+
+            r = response.json()
+            if isinstance(r, list):
+                new_events = r
+            else:
+                new_events = r.get("events") or []
+            if not new_events:
+                print("no poly events, bailing")
+                break
+
+            events.extend(new_events)
+            bar.update(len(new_events))
+
+            if isinstance(r, dict):
+                new_cursor = r.get("nextCursor")
+            else:
+                new_cursor = None
+            if not new_cursor or new_cursor == cursor:
+                print("stale poly cursor, stopping")
+                break
+            cursor = new_cursor
+
+    return events
 
 #PredictIt
 pr_url = "https://www.predictit.org/api/marketdata/all/"
