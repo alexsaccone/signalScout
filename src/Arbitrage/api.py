@@ -6,22 +6,43 @@ from tqdm import tqdm
 headers = {"accept": "application/json"}
 
 #Kalshi
-k_url = "https://api.elections.kalshi.com/trade-api/v2/events"
-kalshi = requests.get(k_url, headers=headers)
+k_url = "https://api.elections.kalshi.com/trade-api/v2/markets"
+def mini_kalshi():
+    kalshi = requests.get(k_url, headers=headers)
+    return kalshi.text
 
 def more_kalshi():
-    cursor = ""
+    cursor = None
     events = []
-    total_markets = float('inf')
-    with tqdm(total=total_markets, desc = "fetch") as progress_bar:
-        while True:
-            response = requests.get(k_url, params = dict(limit = 200, cursor = cursor, with_nested_markets = True))
-            r = response.json()
-            if r.get("cursor") == cursor or not r.get("cursor"):
+    pages = 5  # adjust depending on how much time you want to sit around
+    with tqdm(desc="fetch") as bar:
+        for _ in range(pages):
+            params = dict(limit=200, with_nested_markets=True)
+            if cursor:
+                params["cursor"] = cursor
+
+            response = requests.get(k_url, params=params)
+            if response.status_code != 200:
+                print(f"error: {response.status_code}")
                 break
-            events.extend(r.get("events"))
-            cursor = r.get("cursor")
-            progress_bar.update(len(events))
+
+            r = response.json()
+            new_events = r.get("markets") or []
+            if not new_events:
+                print("no events found, bailing")
+                break
+
+            events.extend(new_events)
+            bar.update(len(new_events))
+
+            new_cursor = r.get("cursor")
+            if not new_cursor or new_cursor == cursor:
+                print("stale cursor, stopping")
+                break
+            cursor = new_cursor
+
+    return events
+
 
 
 #Polymarket
