@@ -8,14 +8,14 @@ headers = {"accept": "application/json"}
 
 #Kalshi
 k_url = "https://api.elections.kalshi.com/trade-api/v2/markets"
+
 def mini_kalshi():
     kalshi = requests.get(k_url, headers=headers)
     return kalshi.text
 
-def more_kalshi():
+def more_kalshi(pages):
     cursor = None
     events = []
-    pages = 5  # adjust depending on how much time you want to sit around
     with tqdm(desc="fetch") as bar:
         for _ in range(pages):
             params = dict(limit=200, with_nested_markets=True)
@@ -53,10 +53,9 @@ def mini_poly():
     polymarket = requests.request("GET", p_url)
     return polymarket.text
 
-def more_poly():
+def more_poly(pages):
     cursor = None
     events = []
-    pages = 10  # adjust based on how much polymarket you want
     with tqdm(desc="fetch-poly") as bar:
         for _ in range(pages):
             params = dict(limit=200)

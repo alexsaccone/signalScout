@@ -1,6 +1,6 @@
 # comb through the list of markets and determine if arbitrage opportunities exist
-from formulas import arbitrage_pct, profit_pct, get_stakes, has_arbitrage, pct_return_per_day
-from api import mini_kalshi, more_kalshi, mini_poly, more_poly
+from formulas import *
+from api import *
 import json
 from datetime import datetime
 import torch
@@ -12,14 +12,14 @@ from sentence_transformers import SentenceTransformer
 #Some room to spare
 end_of_year = datetime(2026, 1, 2).timestamp()
 
-def kalshi_case():
+def filter_kalshi_events():
     # CASE 1
     # kalshi = mini_kalshi()
     # k_data = json.loads(kalshi)
     # events = k_data['markets']
 
     #CASE 2
-    events = more_kalshi()
+    events = more_kalshi(5)
 
     real_events = []
 
@@ -38,8 +38,8 @@ def kalshi_case():
     print(len(events), len(real_events))
     return real_events
 
-def polymarket_case():
-    events = more_poly()
+def filter_polymarket_events():
+    events = more_poly(5)
     real_events = []
 
     for market in events:
@@ -67,7 +67,7 @@ def polymarket_case():
         
 def sentiment_analysis(kalshi, polymarket):
     print("Now starting sentiment analysis")
-    model = SentenceTransformer("dunzhang/stella_en_1.5B_v5", trust_remote_code=True)
+    model = SentenceTransformer("all-MiniLM-L6-v2", trust_remote_code=True)
 
     kalshi = pd.DataFrame(kalshi)
     polymarket = pd.DataFrame(polymarket)
