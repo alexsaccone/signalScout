@@ -47,7 +47,7 @@ def more_kalshi(pages):
 
 
 #Polymarket
-p_url = "https://gamma-api.polymarket.com/markets"
+p_url = "https://gamma-api.polymarket.com/markets?closed=false"
 
 def mini_poly():
     polymarket = requests.request("GET", p_url)

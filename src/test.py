@@ -1,4 +1,4 @@
-from arbitrage.api import *
+from Arbitrage.api import *
 
 # print(more_kalshi(5))
 print(more_poly(1))

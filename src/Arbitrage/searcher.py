@@ -19,13 +19,17 @@ def filter_kalshi_events():
     # events = k_data['markets']
 
     #CASE 2
-    events = more_kalshi(5)
+    events = more_kalshi(50)
 
     real_events = []
 
     for event in events:
         dt = event["close_time"]
-        close_time = datetime.strptime(dt, "%Y-%m-%dT%H:%M:%SZ")
+
+        if "T" in dt:
+            close_time = datetime.strptime(dt, "%Y-%m-%dT%H:%M:%SZ")
+        else:
+            close_time = datetime.strptime(dt, "%Y-%m-%d")
         liquidity = event["liquidity"]
         if close_time and close_time.timestamp() > end_of_year:
             # print("Fail condition 1 (Too long)")
@@ -39,7 +43,7 @@ def filter_kalshi_events():
     return real_events
 
 def filter_polymarket_events():
-    events = more_poly(5)
+    events = more_poly(100)
     real_events = []
 
     for market in events:
@@ -99,5 +103,6 @@ def sentiment_analysis(kalshi, polymarket):
 def arbitrage_analysis():
     print("doing analysis")
 
-print(sentiment_analysis(kalshi_case(), polymarket_case()))
+print(sentiment_analysis(filter_kalshi_events(), filter_polymarket_events()))
 # polymarket_case()
+# print(filter_kalshi_events())
