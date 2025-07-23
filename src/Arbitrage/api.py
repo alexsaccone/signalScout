@@ -77,8 +77,6 @@ def more_poly(pages):
 
     return all_markets
 
-print(len(more_poly(2)))
-
 #PredictIt
 pr_url = "https://www.predictit.org/api/marketdata/all/"
 predict = requests.get(pr_url, headers = headers)
