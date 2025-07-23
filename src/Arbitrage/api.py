@@ -47,20 +47,19 @@ def more_kalshi(pages):
 
 
 #Polymarket
-p_url = "https://gamma-api.polymarket.com/markets?closed=false"
+p_url = "https://gamma-api.polymarket.com/markets"
 
 def mini_poly():
     polymarket = requests.request("GET", p_url)
     return polymarket.text
 
 def more_poly(pages):
-    base_url = "https://gamma-api.polymarket.com/markets"
     limit = 500
     offset = 0
     all_markets = []
 
     for i in range(pages):
-        url = f"{base_url}?limit={limit}&offset={offset}"
+        url = f"{p_url}?limit={limit}&offset={offset}&closed=false"
         response = requests.get(url)
         
         if response.status_code != 200:
@@ -78,7 +77,7 @@ def more_poly(pages):
 
     return all_markets
 
-print(len(more_poly()))
+print(len(more_poly(2)))
 
 #PredictIt
 pr_url = "https://www.predictit.org/api/marketdata/all/"
