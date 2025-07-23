@@ -20,7 +20,7 @@ def filter_kalshi_events():
     # events = k_data['markets']
 
     #CASE 2
-    events = more_kalshi(1000)
+    events = more_kalshi(400)
 
     real_events = []
 
@@ -47,7 +47,7 @@ def filter_kalshi_events():
     return real_events
 
 def filter_polymarket_events():
-    events = more_poly(1000)
+    events = more_poly(90)
     real_events = []
 
     for market in events:
@@ -75,51 +75,54 @@ def filter_polymarket_events():
     print(len(events), len(real_events))
     return real_events
      
-def sentiment_analysis(kalshi, polymarket):
-    print("Now starting sentiment analysis")
-    model = SentenceTransformer("all-MiniLM-L6-v2", trust_remote_code=True)
+def sentiment_analysis(kalshi, polymarket, topn=5):
+    print("now starting sentiment analysis")
+
+    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu", trust_remote_code=False)
 
     kalshi = pd.DataFrame(kalshi)
     polymarket = pd.DataFrame(polymarket)
+    print(f"k={len(kalshi)}, p={len(polymarket)}", flush=True)
 
-    kalshi["bet"] = kalshi["title"] + " " + kalshi["subtitle"] + "\n" + kalshi['rules_primary'] + "\n End date: " + kalshi["close_time"].astype(str)
-    polymarket["bet"] = polymarket["question"] + "\n" + polymarket["description"] + "\n End date: " + polymarket["endDateIso"].astype(str)
+    kalshi["bet"] = (kalshi["title"] + " " + kalshi["subtitle"] + "\n" + kalshi['rules_primary'] + "\n End date: " + kalshi["close_time"].astype(str))
+    
+    polymarket["bet"] = (polymarket["question"] + "\n" + polymarket["description"] + "\n End date: " + polymarket["endDateIso"].astype(str))
+    
+    k_emb = model.encode(kalshi["bet"].tolist(),convert_to_tensor=True,normalize_embeddings=True,batch_size=256)
+    
+    p_emb = model.encode(polymarket["bet"].tolist(),convert_to_tensor=True,normalize_embeddings=True,batch_size=256)
 
-    k_emb = model.encode(kalshi["bet"].tolist(), convert_to_tensor=True)
-    p_emb = model.encode(polymarket["bet"].tolist(), convert_to_tensor=True)
-
-    print("Cosine similarity")
-    sims = torch.nn.functional.cosine_similarity(k_emb.unsqueeze(1), p_emb.unsqueeze(0), dim=-1).cpu().numpy()
-
+    sims = (k_emb @ p_emb.T).cpu().numpy() #Oh yeh we don't even need cosine similarity here
     k_idx, p_idx = sims.shape
-    print("Pandas part")
+    # keep only topn matches per kalshi to avoid O(k*p) dataframe explosion
+    topj = np.argpartition(-sims, topn, axis=1)[:, :topn]
 
-    results = []
+    rows = []
     for i in range(k_idx):
-        for j in range(p_idx):
-            prices_string = polymarket.iloc[j]["outcomePrices"]
-            string_list = json.loads(prices_string)
-            prices = [float(num) for num in string_list]
-            time = datetime.strptime(kalshi.iloc[i]["close_time"], '%Y-%m-%dT%H:%M:%SZ').date()
-            results.append({
+        for j in topj[i]:
+            prices_raw = polymarket.iloc[j]["outcomePrices"]
+            prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+            time = pd.to_datetime(kalshi.iloc[i]["close_time"], utc=True).date()
+            rows.append({
                 "kalshi": kalshi.iloc[i]["title"],
                 "polymarket": polymarket.iloc[j]["question"],
-                "similarity": sims[i][j],
-                "oddsK_yes": kalshi.iloc[i]["yes_ask"], # ??
-                "oddsK_no": kalshi.iloc[i]["no_ask"], # ??
-                "oddsP_yes": prices[0],
-                "oddsP_no": prices[1],
+                "similarity": sims[i, j],
+                "oddsK_yes": kalshi.iloc[i]["yes_ask"],
+                "oddsK_no": kalshi.iloc[i]["no_ask"],
+                "oddsP_yes": float(prices[0]),
+                "oddsP_no": float(prices[1]),
                 "kalshi_close": time,
                 "polymarket_close": polymarket.iloc[j]["endDateIso"]
             })
 
-    df = pd.DataFrame(results).sort_values("similarity", ascending=False)
+    df = pd.DataFrame(rows).sort_values("similarity", ascending=False)
     return df
+
 
 def arbitrage_analysis(df):
     try:
-        df['kalshi_close'] = pd.to_datetime(df['kalshi_close'])
-        df['polymarket_close'] = pd.to_datetime(df['polymarket_close'])
+        df['kalshi_close'] = pd.to_datetime(df["kalshi_close"], utc=True, errors="coerce")
+        df['polymarket_close'] = pd.to_datetime(df['polymarket_close'], utc = True, errors = "coerce")
     except Exception as e:
         print(f"Error converting date columns: {e}")
         # It's helpful to see the data that's causing the error
