@@ -17,6 +17,6 @@ def get_stakes(odds1: float, odds2: float):
 def has_arbitrage(p: float):
     return (p < 1.0)
 
-# Takes in an arbitrage percentage and returns the percentage return per day
+# Takes in an arbitrage percentage and a number of days and returns the percentage return per day
 def pct_return_per_day(p: float, days: int):
-    return ((1.0 + profit_pct(p)) ** (1.0 / days)) - 1.0
+    return ((1.0 + profit_pct(p)) ** (1.0 / days)) - 1.0 if days != 0 else profit_pct(p)

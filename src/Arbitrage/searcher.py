@@ -20,7 +20,7 @@ def filter_kalshi_events():
     # events = k_data['markets']
 
     #CASE 2
-    events = more_kalshi(100)
+    events = more_kalshi(1000)
 
     real_events = []
 
@@ -47,7 +47,7 @@ def filter_kalshi_events():
     return real_events
 
 def filter_polymarket_events():
-    events = more_poly(100)
+    events = more_poly(1000)
     real_events = []
 
     for market in events:
@@ -100,6 +100,7 @@ def sentiment_analysis(kalshi, polymarket):
             prices_string = polymarket.iloc[j]["outcomePrices"]
             string_list = json.loads(prices_string)
             prices = [float(num) for num in string_list]
+            time = datetime.strptime(kalshi.iloc[i]["close_time"], '%Y-%m-%dT%H:%M:%SZ').date()
             results.append({
                 "kalshi": kalshi.iloc[i]["title"],
                 "polymarket": polymarket.iloc[j]["question"],
@@ -108,7 +109,7 @@ def sentiment_analysis(kalshi, polymarket):
                 "oddsK_no": kalshi.iloc[i]["no_ask"], # ??
                 "oddsP_yes": prices[0],
                 "oddsP_no": prices[1],
-                "kalshi_close": kalshi.iloc[i]["close_time"],
+                "kalshi_close": time,
                 "polymarket_close": polymarket.iloc[j]["endDateIso"]
             })
 
@@ -116,13 +117,24 @@ def sentiment_analysis(kalshi, polymarket):
     return df
 
 def arbitrage_analysis(df):
-    filtered_df = df[df["similarity"] > 0.75]
+    try:
+        df['kalshi_close'] = pd.to_datetime(df['kalshi_close'])
+        df['polymarket_close'] = pd.to_datetime(df['polymarket_close'])
+    except Exception as e:
+        print(f"Error converting date columns: {e}")
+        # It's helpful to see the data that's causing the error
+        print("Problematic 'kalshi_close' data:")
+        print(df['kalshi_close'].head())
+        return pd.DataFrame()
+
+    today = date.today()
+    filtered_df = df[df["similarity"] > 0.75].copy()
     arbitrage_events = []
-    for i in filtered_df:
-        oddsK_yes = 100 / i[oddsK_yes]
-        oddsP_yes = 1 / i[oddsP_yes]
-        oddsK_no = 100 / i[oddsK_no]
-        oddsP_no = 1 / i[oddsP_no]
+    for index, row in filtered_df.iterrows():
+        oddsK_yes = 100 / float(row["oddsK_yes"]) if float(row["oddsK_yes"]) != 0 else 1
+        oddsP_yes = 1 / float(row["oddsP_yes"]) if float(row["oddsP_yes"]) != 0 else 1
+        oddsK_no = 100 / float(row["oddsK_no"]) if float(row["oddsK_no"]) != 0 else 1
+        oddsP_no = 1 / float(row["oddsP_no"]) if float(row["oddsP_no"]) != 0 else 1
 
         a_pct1 = arbitrage_pct(oddsK_yes, oddsP_no)
         a_pct2 = arbitrage_pct(oddsK_no, oddsP_yes)
@@ -133,18 +145,22 @@ def arbitrage_analysis(df):
                 stakes = get_stakes(oddsK_yes, oddsP_no)
             else:
                 stakes = get_stakes(oddsK_no, oddsP_yes)
-            days = (max(i["kalshi_close"], i["polymarket_close"]) - date.today()).days
+            days = ((max(row["kalshi_close"], row["polymarket_close"])).date() - today).days
             arbitrage_events.append({
-                "kalshi_name": i["kalshi"],
-                "polymarket_name": i["polymarket"],
+                "kalshi_name": row["kalshi"],
+                "polymarket_name": row["polymarket"],
                 "arbitrage_pct": best_a_pct,
                 "profit_pct": profit_pct(best_a_pct),
                 "kalshi_stake": stakes[0],
                 "polymarket_stake": stakes[1],
                 "daily_pct_return": pct_return_per_day(best_a_pct, days)
             })
-        
-    ranked_odds_df = pd.DataFrame(arbitrage_events).sort_values("Daily pct return", ascending=False)
+
+
+    if not arbitrage_events:
+        return pd.DataFrame()
+
+    ranked_odds_df = pd.DataFrame(arbitrage_events).sort_values("daily_pct_return", ascending=False)
     return ranked_odds_df
 
 def true_match_checker(df):
@@ -158,6 +174,6 @@ def true_match_checker(df):
                 verified.append({**row,"verified": True,"expected_profit": "placeholder"})
         return pd.DataFrame(verified)
 
-print(sentiment_analysis(filter_kalshi_events(), filter_polymarket_events()))
-# polymarket_case()
-# print(filter_kalshi_events())
+df = sentiment_analysis(filter_kalshi_events(), filter_polymarket_events())
+new_df = arbitrage_analysis(df)
+new_df.to_csv("output3.csv")
