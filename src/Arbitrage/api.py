@@ -54,42 +54,33 @@ def mini_poly():
     return polymarket.text
 
 def more_poly(pages):
-    cursor = None
-    events = []
-    with tqdm(desc="fetch-poly") as bar:
-        for _ in range(pages):
-            params = dict(limit=200)
-            if cursor:
-                params["cursor"] = cursor
+    base_url = "https://gamma-api.polymarket.com/markets"
+    limit = 500
+    offset = 0
+    all_markets = []
 
-            response = requests.get(p_url, params=params)
-            if response.status_code != 200:
-                print(f"poly error: {response.status_code}")
-                break
+    for i in range(pages):
+        url = f"{base_url}?limit={limit}&offset={offset}"
+        response = requests.get(url)
+        
+        if response.status_code != 200:
+            print(f"Error: Received status code {response.status_code}")
+            break
 
-            r = response.json()
-            if isinstance(r, list):
-                new_events = r
-            else:
-                new_events = r.get("events") or []
-            if not new_events:
-                print("no poly events, bailing")
-                break
+        markets = response.json()
+        all_markets.extend(markets)
 
-            events.extend(new_events)
-            bar.update(len(new_events))
+        # Stop if fewer markets than limit are returned or response is empty
+        if len(markets) < limit or not markets:
+            break
 
-            if isinstance(r, dict):
-                new_cursor = r.get("nextCursor")
-            else:
-                new_cursor = None
-            if not new_cursor or new_cursor == cursor:
-                print("stale poly cursor, stopping")
-                break
-            cursor = new_cursor
+        offset += limit
 
-    return events
+    return all_markets
+
+print(len(more_poly()))
 
 #PredictIt
 pr_url = "https://www.predictit.org/api/marketdata/all/"
 predict = requests.get(pr_url, headers = headers)
+
