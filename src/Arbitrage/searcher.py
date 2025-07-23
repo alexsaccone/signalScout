@@ -19,7 +19,7 @@ def filter_kalshi_events():
     # events = k_data['markets']
 
     #CASE 2
-    events = more_kalshi(50)
+    events = more_kalshi(100)
 
     real_events = []
 
@@ -27,7 +27,10 @@ def filter_kalshi_events():
         dt = event["close_time"]
 
         if "T" in dt:
-            close_time = datetime.strptime(dt, "%Y-%m-%dT%H:%M:%SZ")
+            try:
+                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%S.%fZ')
+            except ValueError:
+                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%SZ')
         else:
             close_time = datetime.strptime(dt, "%Y-%m-%d")
         liquidity = event["liquidity"]
@@ -52,7 +55,10 @@ def filter_polymarket_events():
             continue
 
         if "T" in dt:
-            close_time = datetime.strptime(dt, "%Y-%m-%dT%H:%M:%SZ")
+            try:
+                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%S.%fZ')
+            except ValueError:
+                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%SZ')
         else:
             close_time = datetime.strptime(dt, "%Y-%m-%d")
 
@@ -67,8 +73,7 @@ def filter_polymarket_events():
 
     print(len(events), len(real_events))
     return real_events
-
-        
+     
 def sentiment_analysis(kalshi, polymarket):
     print("Now starting sentiment analysis")
     model = SentenceTransformer("all-MiniLM-L6-v2", trust_remote_code=True)
@@ -100,8 +105,20 @@ def sentiment_analysis(kalshi, polymarket):
     df = pd.DataFrame(results).sort_values("similarity", ascending=False)
     return df
 
-def arbitrage_analysis():
-    print("doing analysis")
+def arbitrage_analysis(df, oddsA, oddsB):
+    filtered = df[df["similarity"] > 0.75]
+    arbBool = has_arbitrage(oddsA, oddsB)
+
+def true_match_checker(df):
+        filtered = df[df["similarity"] > 0.75]
+        verified = []
+        for idx, row in filtered.iterrows():
+            prompt = f"Are these two markets about the same event?\nKalshi: {row['kalshi']}\nPolymarket: {row['polymarket']}\nAnswer Yes or No."
+            # resp = model.generate(prompt) 
+            is_same = "yes" in resp.lower()
+            if is_same:
+                verified.append({**row,"verified": True,"expected_profit": "placeholder"})
+        return pd.DataFrame(verified)
 
 print(sentiment_analysis(filter_kalshi_events(), filter_polymarket_events()))
 # polymarket_case()
