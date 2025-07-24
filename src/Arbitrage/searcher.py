@@ -47,7 +47,7 @@ def filter_kalshi_events():
     return real_events
 
 def filter_polymarket_events():
-    events = more_poly(300)
+    events = more_poly(50)
     real_events = []
 
     for market in events:
@@ -111,6 +111,8 @@ def sentiment_analysis(kalshi, polymarket, topn=5):
                 "oddsK_no": kalshi.iloc[i]["no_ask"],
                 "oddsP_yes": float(prices[0]),
                 "oddsP_no": float(prices[1]),
+                "rulesK": "Primary rules: " + kalshi.iloc[i]["rules_primary"] + " Secondary rules: " + kalshi.iloc[i]["rules_secondary"],
+                "rulesP": polymarket.iloc[j]["description"],
                 "kalshi_close": time,
                 "polymarket_close": polymarket.iloc[j]["endDateIso"]
             })
@@ -156,7 +158,9 @@ def arbitrage_analysis(df):
                 "profit_pct": profit_pct(best_a_pct),
                 "kalshi_stake": stakes[0],
                 "polymarket_stake": stakes[1],
-                "daily_pct_return": pct_return_per_day(best_a_pct, days)
+                "daily_pct_return": pct_return_per_day(best_a_pct, days),
+                "rulesK": row["rulesK"],
+                "rulesP": row["rulesP"]
             })
 
 
@@ -176,8 +180,3 @@ def true_match_checker(df):
             if is_same:
                 verified.append({**row,"verified": True,"expected_profit": "placeholder"})
         return pd.DataFrame(verified)
-
-df = sentiment_analysis(filter_kalshi_events(), filter_polymarket_events())
-df.to_csv("output.csv")
-new_df = arbitrage_analysis(df)
-new_df.to_csv("output2.csv")
