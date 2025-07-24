@@ -20,7 +20,7 @@ def filter_kalshi_events():
     # events = k_data['markets']
 
     #CASE 2
-    events = more_kalshi(400)
+    events = more_kalshi(1000)
 
     real_events = []
 
@@ -47,7 +47,7 @@ def filter_kalshi_events():
     return real_events
 
 def filter_polymarket_events():
-    events = more_poly(90)
+    events = more_poly(300)
     real_events = []
 
     for market in events:
@@ -178,5 +178,6 @@ def true_match_checker(df):
         return pd.DataFrame(verified)
 
 df = sentiment_analysis(filter_kalshi_events(), filter_polymarket_events())
+df.to_csv("output.csv")
 new_df = arbitrage_analysis(df)
-new_df.to_csv("output3.csv")
+new_df.to_csv("output2.csv")
