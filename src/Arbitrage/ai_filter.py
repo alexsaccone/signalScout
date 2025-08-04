@@ -19,6 +19,9 @@ def confirm_identical_criteria(df):
 
 
 # load_dotenv()
-events_final = confirm_identical_criteria(sentiment_analysis(filter_kalshi_events(),filter_polymarket_events()))
-with open("output_final", 'w', encoding='utf-8') as f:
-    f.write(events_final)
+events_final = arbitrage_analysis(sentiment_analysis(filter_kalshi_events(),filter_polymarket_events()))
+events_final.to_csv('output_final3.csv', index=False)
+
+
+# with open("output_final2.csv", 'w', encoding='utf-8') as f:
+#     f.write(events_final)
