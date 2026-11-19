@@ -98,6 +98,7 @@ def scan(args):
         atomic_write(args.settlement_assessment, lambda output: json.dump(assessment, output, indent=2))
         print(f"Settlement assessment: {len(assessment['verified'])} verified, "
               f"{len(assessment['cancellation_only'])} cancellation-only, "
+              f"{len(assessment['different_rules'])} have different rules, "
               f"{len(assessment['manual_review'])} need manual review")
     if publish:
         write_snapshot(args.output, result)
