@@ -1,12 +1,19 @@
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 import json
 import logging
+from time import sleep
 
 import requests
 
 KALSHI_URL = "https://external-api.kalshi.com/trade-api/v2"
 GAMMA_URL = "https://gamma-api.polymarket.com"
 SCAN_WINDOW = timedelta(days=30)
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+class ScanError(RuntimeError):
+    pass
 
 
 def utc_timestamp(value):
@@ -22,9 +29,36 @@ def binary_values(value):
 
 
 def fetch_json(url, params=None):
-    response = requests.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    return response.json(), response.headers
+    for attempt in range(3):
+        try:
+            response = requests.get(url, params=params, timeout=(5, 15))
+        except (requests.Timeout, requests.ConnectionError) as error:
+            if attempt == 2:
+                raise ScanError(f"{url}: connection failed after three attempts") from error
+            sleep(2 ** attempt)
+            continue
+        except requests.RequestException as error:
+            raise ScanError(f"{url}: request failed") from error
+
+        if response.status_code in RETRY_STATUSES and attempt < 2:
+            retry_after = response.headers.get("Retry-After")
+            delay = 2 ** attempt
+            if retry_after:
+                try:
+                    if retry_after.isdecimal():
+                        delay = int(retry_after)
+                    else:
+                        delay = (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            sleep(min(10, max(0, delay)))
+            continue
+
+        try:
+            response.raise_for_status()
+            return response.json(), response.headers
+        except (requests.RequestException, ValueError) as error:
+            raise ScanError(f"{url}: HTTP {response.status_code} or invalid JSON") from error
 
 
 def normalize_market(market, venue, now):
@@ -80,35 +114,63 @@ def normalize_market(market, venue, now):
             return None
         return normalized
     except (AttributeError, KeyError, TypeError, ValueError) as error:
-        logging.warning("Skipping malformed %s market (%s)", venue, type(error).__name__)
-        return None
+        raise ValueError(f"Malformed {venue} market ({type(error).__name__})") from error
+
+
+def normalize_markets(rows, venue, now):
+    result = []
+    valid = malformed = 0
+    for row in rows:
+        try:
+            market = normalize_market(row, venue, now)
+        except ValueError:
+            malformed += 1
+            continue
+        valid += 1
+        if market is not None:
+            result.append(market)
+    if malformed:
+        logging.warning("Skipped %d malformed %s market records", malformed, venue)
+        if not valid:
+            raise ScanError(f"{venue} returned no readable market records")
+    return result
+
+
+def market_rows(url, params, response_cursor, request_cursor, pages):
+    seen = set()
+    for _ in range(pages):
+        payload, _ = fetch_json(url, params)
+        if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
+            raise ScanError(f"{url}: invalid market page")
+        if response_cursor == "cursor" and response_cursor not in payload:
+            raise ScanError(f"{url}: missing pagination cursor")
+        rows = payload["markets"]
+        cursor = payload.get(response_cursor, "")
+        if not isinstance(cursor, str) or cursor in seen or (cursor and not rows):
+            raise ScanError(f"{url}: invalid or repeated pagination cursor")
+        yield from rows
+        if not cursor:
+            return
+        seen.add(cursor)
+        params = {**params, request_cursor: cursor}
+    raise ScanError(f"{url}: page limit reached before the end of the feed")
 
 
 def more_kalshi(pages, now):
-    markets = []
-    params = {"limit": 200, "status": "open", "mve_filter": "exclude"}
-    for _ in range(pages):
-        payload, _ = fetch_json(f"{KALSHI_URL}/markets", params)
-        markets.extend(payload["markets"])
-        cursor = payload.get("cursor")
-        if not cursor:
-            break
-        params["cursor"] = cursor
-    return [market for payload in markets if (market := normalize_market(payload, "kalshi", now)) is not None]
+    params = {
+        "limit": 200, "mve_filter": "exclude",
+        "min_close_ts": int(now.timestamp()),
+        "max_close_ts": int((now + SCAN_WINDOW).timestamp()),
+    }
+    rows = market_rows(f"{KALSHI_URL}/markets", params, "cursor", "cursor", pages)
+    return normalize_markets(rows, "kalshi", now)
 
 
 def more_poly(pages, now):
-    markets = []
     params = {
         "limit": 200, "closed": "false",
         "end_date_min": now.isoformat(),
         "end_date_max": (now + SCAN_WINDOW).isoformat(),
     }
-    for _ in range(pages):
-        payload, _ = fetch_json(f"{GAMMA_URL}/markets/keyset", params)
-        markets.extend(payload["markets"])
-        cursor = payload.get("next_cursor")
-        if not cursor:
-            break
-        params["after_cursor"] = cursor
-    return [market for payload in markets if (market := normalize_market(payload, "polymarket", now)) is not None]
+    rows = market_rows(f"{GAMMA_URL}/markets/keyset", params, "next_cursor", "after_cursor", pages)
+    return normalize_markets(rows, "polymarket", now)

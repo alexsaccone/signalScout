@@ -14,14 +14,22 @@ python -m unittest discover -s tests -v
 python -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
 ```
 
-Omit `--fixture` to scan public markets closing in the next 30 days. Use
-`--review-candidates candidates.json` to export similarly titled contracts for review.
-Copy pairs with equivalent outcomes and settlement rules into a JSON array, then
-pass it as `--reviewed-pairs reviewed.json`. Pairs whose listed terms or outcome
-tokens change require a fresh review. The fixture shows the file format under
-`reviewed_pairs`.
+The live scanner reads public markets closing in the next 30 days.
+
+```sh
+python -m src.Arbitrage.ai_filter --review-candidates candidates.json
+python -m src.Arbitrage.ai_filter --reviewed-pairs reviewed.json --output opportunities.csv
+```
+
+The first command exports similarly titled contracts for review. Copy pairs
+with equivalent outcomes and settlement rules into a JSON array in
+`reviewed.json`. The fixture shows the format under `reviewed_pairs`.
+Pairs whose listed terms or outcome tokens change require a fresh review.
 
 The scanner uses the best available buy price and size on each order book,
 venue taker fees, and whole matched contracts. The CSV reports the older of
 the two quote times and estimated net return as a percentage. Quotes older
 than 60 seconds and unsupported fee models are skipped.
+
+A complete scan with no opportunities writes a header-only CSV. A failed or
+incomplete scan exits with status 1 and preserves the previous snapshot.
