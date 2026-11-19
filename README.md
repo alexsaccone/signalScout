@@ -49,7 +49,10 @@ python -m unittest discover -s tests -v
 
 Live discovery pulls public Kalshi and Polymarket markets closing within
 24 hours. Use `--hours` to adjust the discovery window. The discovery
-command writes possible matches to `candidates.json` for manual review.
+command checks the dated event, participants, affirmative outcome, and published
+settlement terms, including the result source and exceptions. It writes pairs
+whose terms it can match to `candidates.json` for manual review. Discovery
+skips rule formats it cannot compare, so the list can miss equivalent contracts.
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --review-candidates candidates.json
