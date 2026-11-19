@@ -13,6 +13,18 @@ time. Polymarket odds cover games starting within three days.
 Add confirmed reviews to `data/reviewed_pairs.json` to include them in the
 scheduled scan. An empty review list still publishes upcoming game odds.
 
+Every **Publish dashboard** run also scans 96 hours of open markets. Download
+the **settlement-review** artifact from the run to see the strict matcher
+results in `candidates.json` and the wider shortlist in `review-leads.json`.
+The wider shortlist compares dated settlement conditions and includes both
+venues' terms for review. Check each venue's full rulebook, including the
+measurement period, result source, exclusions, and cancellation or fallback
+payout. Add the two reviewed market records to `data/reviewed_pairs.json`
+via a pull request. A merge triggers a fresh pricing and dashboard run, and
+later scheduled runs revalidate the approved terms before pricing. Discovery
+runs independently of the dashboard build, so an exchange outage affecting
+discovery can still allow the dashboard to publish.
+
 To preview the dashboard offline, generate its labeled fixture snapshot from
 the repository root with the Python environment below.
 

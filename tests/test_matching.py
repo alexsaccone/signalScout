@@ -4,7 +4,7 @@ import json
 import unittest
 
 from src.Arbitrage.api import normalize_market, utc_timestamp
-from src.Arbitrage.searcher import review_candidates, verified_pairs
+from src.Arbitrage.searcher import review_candidates, review_leads, verified_pairs
 
 
 class MatchingTest(unittest.TestCase):
@@ -30,6 +30,24 @@ class MatchingTest(unittest.TestCase):
         pair, = verified_pairs([self.kalshi], [self.poly], self.reviews * 2)
         self.assertEqual((pair[0]["id"], pair[1]["id"]), ("K-EXAMPLE", "P-EXAMPLE"))
         self.assertEqual(pair[1]["tokens"], {"yes": "20", "no": "10"})
+
+    def test_manual_leads_keep_possible_fixtures_with_unverified_rules(self):
+        kalshi, poly = self.matching_contracts()
+        left = dict(kalshi, rules=kalshi["rules"].replace("Miami Heat game", "Miami Heat NBA game"))
+        right = dict(poly, rules=poly["rules"].replace("Miami Heat game", "Miami Heat NBA game")
+                     .replace("settle at 50-50", "settle at fair market price"))
+        other_day = dict(right, id="different-date", rules=right["rules"].replace("Nov. 20", "Nov. 21"))
+        self.assertEqual(review_candidates([left], [right]), [])
+        lead, = review_leads([left], [other_day, right])
+        self.assertEqual(lead["event_date"], "2026-11-20")
+        self.assertEqual(lead["polymarket"]["rules"], right["rules"])
+        self.assertEqual(list(verified_pairs([left], [right], [])), [])
+
+        left = dict(left, title="Boston wins 1st Half")
+        first_half = dict(right, title="Boston Celtics leading at halftime?")
+        full_match = dict(right, id="full-match", title="Boston Celtics wins")
+        lead, = review_leads([left], [first_half, full_match])
+        self.assertEqual(lead["polymarket"]["id"], right["id"])
 
     def test_title_similarity_without_full_terms_is_insufficient(self):
         self.assertEqual(review_candidates([self.kalshi], [self.poly]), [])
