@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dashboardState, filterGames, validateSnapshot } from "../src/snapshot.js";
+import { dashboardState, filterGames, loadSnapshot, validateSnapshot } from "../src/snapshot.js";
 
 const now = Date.parse("2026-11-19T00:00:00Z");
 const game = {
@@ -36,4 +36,26 @@ test("search and league filters combine and malformed snapshots are rejected", (
   assert.deepEqual(filterGames([game], "  FOXES ", "HOCKEY"), [game]);
   assert.deepEqual(filterGames([game], "Falcons", "NFL"), []);
   assert.throws(() => validateSnapshot({ ...snapshot, generated_at: "invalid" }), /Invalid/);
+});
+
+test("manual refresh bypasses browser and CDN caches and uses the new snapshot", async () => {
+  const { signal } = new AbortController();
+  const newer = { ...snapshot, generated_at: new Date(now + 60000).toISOString(), odds: [] };
+  const calls = [];
+  const request = async (url, options) => {
+    calls.push([url, options]);
+    return { ok: true, json: async () => calls.length === 1 ? snapshot : newer };
+  };
+  assert.deepEqual(await loadSnapshot(signal, null, request), snapshot);
+  assert.deepEqual(await loadSnapshot(signal, now, request), newer);
+  assert.deepEqual(calls, [
+    ["snapshot.json", { signal, cache: "no-store" }],
+    ["snapshot.json?refresh=" + now, { signal, cache: "no-store" }],
+  ]);
+});
+
+test("refresh rejects missing and malformed snapshots", async () => {
+  const { signal } = new AbortController();
+  await assert.rejects(loadSnapshot(signal, now, async () => ({ ok: false })), /unavailable/);
+  await assert.rejects(loadSnapshot(signal, now, async () => ({ ok: true, json: async () => ({}) })), /Invalid/);
 });

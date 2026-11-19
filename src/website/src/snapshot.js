@@ -9,6 +9,13 @@ export function validateSnapshot(snapshot) {
   return snapshot;
 }
 
+export async function loadSnapshot(signal, refreshAt, request = globalThis.fetch) {
+  const url = refreshAt === null ? "snapshot.json" : "snapshot.json?refresh=" + refreshAt;
+  const response = await request(url, { signal, cache: "no-store" });
+  if (!response.ok) throw new Error("Snapshot unavailable");
+  return validateSnapshot(await response.json());
+}
+
 export function dashboardState(snapshot, now) {
   const generated = Date.parse(snapshot.generated_at);
   const fixture = snapshot.source === "fixture";

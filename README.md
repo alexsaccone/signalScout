@@ -5,6 +5,8 @@
 The [SignalScout dashboard](https://alexsaccone.github.io/signalScout/) shows
 upcoming Polymarket moneyline odds and estimates for reviewed contract pairs.
 The GitHub Actions workflow refreshes the snapshot roughly every two hours.
+Select **Refresh data** to check for the latest published snapshot. The dashboard
+shows when it finished checking and keeps the last loaded data if a check fails.
 A failed run leaves the previous snapshot online, with its original update
 time. Polymarket odds cover games starting within three days.
 
