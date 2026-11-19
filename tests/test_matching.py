@@ -23,6 +23,14 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(review_candidates([self.kalshi], [self.poly]), self.reviews)
         self.assertEqual(list(verified_pairs([self.kalshi], [self.poly], [])), [])
 
+    def test_reworded_titles_are_suggested_without_approving_them(self):
+        kalshi = dict(self.kalshi, title="Boston Celtics at Miami Heat Winner")
+        poly = dict(self.poly, title="Miami Heat vs. Boston Celtics Moneyline")
+        other = dict(self.poly, id="unrelated", title="Miami Dolphins vs. Buffalo Bills")
+        candidate, = review_candidates([kalshi], [other, poly])
+        self.assertEqual(candidate["polymarket"]["title"], poly["title"])
+        self.assertEqual(list(verified_pairs([kalshi], [poly], [])), [])
+
     def test_market_terms_change_invalidates_the_review(self):
         for changed in (
             dict(self.poly, title="Will Example A win Game 2?"),
