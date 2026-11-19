@@ -44,7 +44,7 @@ class IngestionTest(unittest.TestCase):
         with mock.patch("src.Arbitrage.api.requests.get") as get, self.assertLogs(level="WARNING"):
             get.return_value.json.return_value = {"markets": [{"bad": "record"}, KALSHI], "cursor": ""}
             self.assertEqual([market["id"] for market in more_kalshi(2, NOW)], ["K-EXAMPLE"])
-        self.assertEqual(get.call_args.kwargs["params"]["status"], "open")
+        self.assertEqual(get.call_args.kwargs["params"]["min_close_ts"], int(NOW.timestamp()))
 
     def test_polymarket_requests_the_next_cursor(self):
         with mock.patch("src.Arbitrage.api.requests.get") as get:
