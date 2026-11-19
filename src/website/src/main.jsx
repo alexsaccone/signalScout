@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { dashboardState, filterGames, validateSnapshot } from "./snapshot.js";
+import { dashboardState, filterGames, loadSnapshot } from "./snapshot.js";
 import "./style.css";
 
 const fixtureLabel = "Fixture preview";
 const shortDate = new Intl.DateTimeFormat(undefined, {
   month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+});
+const checkTime = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric", minute: "2-digit", second: "2-digit",
 });
 const percent = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
 const currency = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
@@ -73,6 +76,7 @@ function App() {
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [request, setRequest] = useState(0);
+  const [checkedAt, setCheckedAt] = useState(null);
   const [now, setNow] = useState(Date.now);
   const [query, setQuery] = useState("");
   const [sport, setSport] = useState("");
@@ -80,22 +84,31 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    let active = true;
     async function load() {
       setLoading(true);
       setError(false);
       try {
-        const response = await fetch("snapshot.json", { signal: controller.signal, cache: "no-cache" });
-        if (!response.ok) throw new Error("Snapshot missing");
-        setSnapshot(validateSnapshot(await response.json()));
-        setNow(Date.now());
+        const next = await loadSnapshot(controller.signal, request ? Date.now() : null);
+        if (!active) return;
+        const loadedAt = Date.now();
+        setSnapshot(next);
+        setNow(loadedAt);
+        if (request) setCheckedAt(loadedAt);
       } catch {
-        if (!controller.signal.aborted) setError(true);
+        if (active) setError(true);
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        clearTimeout(timeout);
+        if (active) setLoading(false);
       }
     }
     load();
-    return () => controller.abort();
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      controller.abort();
+    };
   }, [request]);
 
   useEffect(() => {
@@ -131,7 +144,12 @@ function App() {
                   <span className={"tag " + (state.stale || error ? "warning" : "current")}>
                     {state.fixture ? fixtureLabel : state.stale ? "Stale snapshot" : "Snapshot"}
                   </span>
-                  <div>Updated <time dateTime={snapshot.generated_at}>{formatDate(snapshot.generated_at)}</time></div>
+                  <div>
+                    <div>Updated <time dateTime={snapshot.generated_at}>{formatDate(snapshot.generated_at)}</time></div>
+                    {checkedAt !== null && !loading && !error && (
+                      <div>Checked <time dateTime={new Date(checkedAt).toISOString()}>{checkTime.format(checkedAt)}</time></div>
+                    )}
+                  </div>
                 </>
               )}
               {!state && <span>{loading ? "Loading snapshot" : "Snapshot unavailable"}</span>}
