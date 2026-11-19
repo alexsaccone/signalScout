@@ -1,0 +1,58 @@
+name: Publish dashboard
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */2 * * *'
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/dashboard.yml
+      - data/reviewed_pairs.json
+      - requirements.txt
+      - 'src/Arbitrage/**'
+      - 'src/website/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signalscout-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/website/package-lock.json
+      - run: python -m pip install -r requirements.txt
+      - run: python -m src.Arbitrage.dashboard
+      - run: npm ci && npm test && npm run build
+        working-directory: src/website
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: src/website/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
