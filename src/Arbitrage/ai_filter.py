@@ -88,7 +88,8 @@ def scan(args):
         print(f"Wrote {len(candidates)} review candidates to {args.review_candidates}")
     if publish:
         write_snapshot(args.output, result)
-        print(f"Wrote {len(result)} opportunities to {args.output}")
+        source = "fixture" if args.fixture else "live"
+        print(f"Wrote {len(result)} opportunities to {args.output} ({source} data)")
 
 
 def main(argv=None):
@@ -97,8 +98,11 @@ def main(argv=None):
     parser.add_argument("--reviewed-pairs", type=Path, help="JSON array of reviewed contract pairs.")
     parser.add_argument("--review-candidates", type=Path, help="Write similarly titled pairs for review.")
     parser.add_argument("--hours", type=int, default=24, help="Hours ahead to search for candidates (default: 24).")
-    parser.add_argument("--output", type=Path, default=Path("opportunities.csv"))
+    parser.add_argument("--output", type=Path,
+                        help="CSV destination (default: opportunities.csv or opportunities.example.csv with --fixture).")
     args = parser.parse_args(argv)
+    if args.output is None:
+        args.output = Path("opportunities.example.csv" if args.fixture else "opportunities.csv")
 
     if not (args.fixture or args.reviewed_pairs or args.review_candidates):
         parser.error("provide --reviewed-pairs, --review-candidates, or --fixture")

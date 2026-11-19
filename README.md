@@ -34,7 +34,6 @@ Run these commands from the repository root. The scanner uses Python 3.12.
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
 ```
 
 ### macOS and Linux
@@ -44,27 +43,31 @@ python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
-python -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
 ```
 
 ### Live scans
 
-Live discovery searches public markets closing within 24 hours. Use
-`--hours` to adjust the discovery window. When pricing a list of reviewed
-pairs, the scanner fetches those markets by ID and checks that they are
-still tradable and close within 30 days.
+Live discovery pulls public Kalshi and Polymarket markets closing within
+24 hours. Use `--hours` to adjust the discovery window. The discovery
+command writes possible matches to `candidates.json` for manual review.
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --review-candidates candidates.json
-.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --reviewed-pairs reviewed.json --output opportunities.csv
 ```
 
-On macOS and Linux, use `python` from the activated environment in these commands.
+Compare both contracts' outcomes and settlement rules. Copy confirmed pairs
+from `candidates.json` into the JSON array in `data/reviewed_pairs.json`.
+The fixture shows the format under `reviewed_pairs`. When pricing, the
+scanner fetches reviewed markets by ID and checks that their terms and
+outcome tokens are current, that they are still tradable, and that they
+close within 30 days.
 
-The first command exports similarly titled contracts for review. Copy pairs
-with equivalent outcomes and settlement rules into a JSON array in
-`reviewed.json`. The fixture shows the format under `reviewed_pairs`.
-Pairs whose listed terms or outcome tokens change require a fresh review.
+```powershell
+.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --reviewed-pairs data/reviewed_pairs.json
+```
+
+The review file starts empty. Until a pair passes review and current pricing,
+`opportunities.csv` contains only the column headers.
 
 The scanner uses the best available buy price and size on each order book,
 venue taker fees, and whole matched contracts. The CSV reports the older of
@@ -73,6 +76,18 @@ than 60 seconds and unsupported fee models are skipped.
 
 A complete scan with no opportunities writes a header-only CSV. A failed or
 incomplete scan exits with status 1 and preserves the previous snapshot.
+
+### Offline example
+
+This command reads synthetic fixture data and writes one example opportunity
+to `opportunities.example.csv`.
+
+```powershell
+.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json
+```
+
+On macOS and Linux, use `python` from the activated environment in the
+scanner commands above.
 
 ## Pregame sports baseline
 
