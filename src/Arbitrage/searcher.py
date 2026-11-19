@@ -1,10 +1,7 @@
-# comb through the list of markets and determine if arbitrage opportunities exist
-import json
-from datetime import datetime
-from datetime import date
+from datetime import date, datetime, timezone
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 if __package__:
     from .api import more_kalshi, more_poly
@@ -13,116 +10,46 @@ else:
     from api import more_kalshi, more_poly
     from formulas import arbitrage_pct, get_stakes, has_arbitrage, pct_return_per_day, profit_pct
 
-#Some room to spare
-end_of_year = datetime(2026, 1, 2).timestamp()
 
-def filter_kalshi_events():
-    # CASE 1
-    # kalshi = mini_kalshi()
-    # k_data = json.loads(kalshi)
-    # events = k_data['markets']
+def filter_kalshi_events(now=None):
+    return more_kalshi(1000, now or datetime.now(timezone.utc))
 
-    #CASE 2
-    events = more_kalshi(1000)
 
-    real_events = []
+def filter_polymarket_events(now=None):
+    return more_poly(50, now or datetime.now(timezone.utc))
 
-    for event in events:
-        dt = event["close_time"]
 
-        if "T" in dt:
-            try:
-                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%S.%fZ')
-            except ValueError:
-                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%SZ')
-        else:
-            close_time = datetime.strptime(dt, "%Y-%m-%d")
-        liquidity = event["liquidity"]
-        if close_time and close_time.timestamp() > end_of_year:
-            # print("Fail condition 1 (Too long)")
-            continue
-        if liquidity < 2500:
-            # print("Fail condition 2 (Liquidity)")
-            continue
-        real_events.append(event)
-
-    print(len(events), len(real_events))
-    return real_events
-
-def filter_polymarket_events():
-    events = more_poly(50)
-    real_events = []
-
-    for market in events:
-        dt = market.get("endDateIso") or market.get("endDate")
-        if not dt:
-            continue
-
-        if "T" in dt:
-            try:
-                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%S.%fZ')
-            except ValueError:
-                close_time = datetime.strptime(dt, '%Y-%m-%dT%H:%M:%SZ')
-        else:
-            close_time = datetime.strptime(dt, "%Y-%m-%d")
-
-        liquidity = float(market.get("liquidity") or market.get("liquidity_in_usd") or 0)
-
-        if close_time.timestamp() > end_of_year:
-            continue
-        if liquidity < 2500:
-            continue
-
-        real_events.append(market)
-
-    print(len(events), len(real_events))
-    return real_events
-     
 def sentiment_analysis(kalshi, polymarket, topn=5):
     from sentence_transformers import SentenceTransformer
 
-    print("now starting sentiment analysis")
-
     model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu", trust_remote_code=False)
-
-    kalshi = pd.DataFrame(kalshi)
-    polymarket = pd.DataFrame(polymarket)
-    print(f"k={len(kalshi)}, p={len(polymarket)}", flush=True)
-
-    kalshi["bet"] = (kalshi["title"] + " " + kalshi["subtitle"] + "\n" + kalshi['rules_primary'] + "\n End date: " + kalshi["close_time"].astype(str))
-    
-    polymarket["bet"] = (polymarket["question"] + "\n" + polymarket["description"] + "\n End date: " + polymarket["endDateIso"].astype(str))
-    
-    k_emb = model.encode(kalshi["bet"].tolist(),convert_to_tensor=True,normalize_embeddings=True,batch_size=256)
-    
-    p_emb = model.encode(polymarket["bet"].tolist(),convert_to_tensor=True,normalize_embeddings=True,batch_size=256)
-
-    sims = (k_emb @ p_emb.T).cpu().numpy() #Oh yeh we don't even need cosine similarity here
-    k_idx, p_idx = sims.shape
-    # keep only topn matches per kalshi to avoid O(k*p) dataframe explosion
+    k_emb, p_emb = (
+        model.encode(
+            [f"{market['title']} {market['subtitle']}\n{market['rules']}\n{market['close_time']}" for market in markets],
+            convert_to_tensor=True, normalize_embeddings=True, batch_size=256,
+        )
+        for markets in (kalshi, polymarket)
+    )
+    sims = (k_emb @ p_emb.T).cpu().numpy()
     topj = np.argpartition(-sims, topn, axis=1)[:, :topn]
-
     rows = []
-    for i in range(k_idx):
+    for i, market_k in enumerate(kalshi):
         for j in topj[i]:
-            prices_raw = polymarket.iloc[j]["outcomePrices"]
-            prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
-            time = pd.to_datetime(kalshi.iloc[i]["close_time"], utc=True).date()
+            market_p = polymarket[j]
             rows.append({
-                "kalshi": kalshi.iloc[i]["title"],
-                "polymarket": polymarket.iloc[j]["question"],
+                "kalshi": market_k["title"],
+                "polymarket": market_p["title"],
                 "similarity": sims[i, j],
-                "oddsK_yes": kalshi.iloc[i]["yes_ask"],
-                "oddsK_no": kalshi.iloc[i]["no_ask"],
-                "oddsP_yes": float(prices[0]),
-                "oddsP_no": float(prices[1]),
-                "rulesK":  kalshi.iloc[i]["rules_primary"],
-                "kalshi_close": time,
-                "polymarket_close": polymarket.iloc[j]["endDateIso"]
+                "oddsK_yes": market_k["yes_ask"] * 100,
+                "oddsK_no": market_k["no_ask"] * 100,
+                "oddsP_yes": market_p["yes_ask"],
+                "oddsP_no": market_p["no_ask"],
+                "rulesK": market_k["rules"],
+                "kalshi_close": market_k["close_time"],
+                "polymarket_close": market_p["close_time"],
             })
+    return pd.DataFrame(rows).sort_values("similarity", ascending=False)
 
-    df = pd.DataFrame(rows).sort_values("similarity", ascending=False)
-    return df
 
 
 def arbitrage_analysis(df):
