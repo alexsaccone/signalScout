@@ -2,17 +2,17 @@ from collections import defaultdict
 import re
 
 if __package__:
-    from .api import more_kalshi, more_poly
+    from .api import more_kalshi, more_poly, SCAN_WINDOW
 else:
-    from api import more_kalshi, more_poly
+    from api import more_kalshi, more_poly, SCAN_WINDOW
 
 
-def filter_kalshi_events(now):
-    return more_kalshi(1000, now)
+def filter_kalshi_events(now, window=SCAN_WINDOW):
+    return more_kalshi(1000, now, window)
 
 
-def filter_polymarket_events(now):
-    return more_poly(1000, now)
+def filter_polymarket_events(now, window=SCAN_WINDOW):
+    return more_poly(1000, now, window)
 
 
 def market_terms(market):

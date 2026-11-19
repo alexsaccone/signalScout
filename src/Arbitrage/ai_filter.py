@@ -1,6 +1,6 @@
 import argparse
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -9,11 +9,11 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import urlencode
 
 if __package__:
-    from .api import ScanError, normalize_markets, utc_timestamp
+    from .api import ScanError, lookup_markets, normalize_markets, utc_timestamp
     from .pricing import OUTPUT_FIELDS, price_pairs
     from .searcher import filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
 else:
-    from api import ScanError, normalize_markets, utc_timestamp
+    from api import ScanError, lookup_markets, normalize_markets, utc_timestamp
     from pricing import OUTPUT_FIELDS, price_pairs
     from searcher import filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
 
@@ -63,7 +63,9 @@ def scan(args):
         reviews = fixture["reviewed_pairs"]
     else:
         now = datetime.now(timezone.utc)
-        kalshi, poly = filter_kalshi_events(now), filter_polymarket_events(now)
+        if args.review_candidates:
+            window = timedelta(hours=args.hours)
+            kalshi, poly = filter_kalshi_events(now, window), filter_polymarket_events(now, window)
         reviews = []
 
     if args.reviewed_pairs:
@@ -73,10 +75,17 @@ def scan(args):
 
     publish = args.fixture or args.reviewed_pairs
     if publish:
-        pairs = verified_pairs(kalshi, poly, reviews)
         if args.fixture:
+            pairs = verified_pairs(kalshi, poly, reviews)
             result = price_pairs(pairs, lambda: now, fixture_quotes(fixture["quotes"]))
         else:
+            reviewed_markets = []
+            for venue in ("kalshi", "polymarket"):
+                ids = {review[venue]["id"] for review in reviews}
+                if any(not isinstance(market_id, str) or not market_id.strip() for market_id in ids):
+                    raise ScanError(f"Invalid reviewed {venue} market ID")
+                reviewed_markets.append(lookup_markets(ids, venue, now))
+            pairs = verified_pairs(*reviewed_markets, reviews)
             result = price_pairs(pairs, lambda: datetime.now(timezone.utc))
 
     if args.review_candidates:
@@ -93,11 +102,14 @@ def main(argv=None):
     parser.add_argument("--fixture", type=Path, help="Replay local market responses and reviews.")
     parser.add_argument("--reviewed-pairs", type=Path, help="JSON array of reviewed contract pairs.")
     parser.add_argument("--review-candidates", type=Path, help="Write similarly titled pairs for review.")
+    parser.add_argument("--hours", type=int, default=24, help="Hours ahead to search for candidates (default: 24).")
     parser.add_argument("--output", type=Path, default=Path("opportunities.csv"))
     args = parser.parse_args(argv)
 
     if not (args.fixture or args.reviewed_pairs or args.review_candidates):
         parser.error("provide --reviewed-pairs, --review-candidates, or --fixture")
+    if not 1 <= args.hours <= 720:
+        parser.error("--hours must be between 1 and 720")
     inputs = {path.resolve() for path in (args.fixture, args.reviewed_pairs) if path}
     outputs = [path.resolve() for path in (args.output, args.review_candidates) if path]
     if inputs.intersection(outputs) or len(outputs) != len(set(outputs)):

@@ -2,6 +2,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import csv
 from datetime import datetime, timezone
 from io import StringIO
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -45,7 +46,8 @@ class ReliabilityTest(unittest.TestCase):
             snapshot.write_bytes(b"previous snapshot\n")
             reviews = Path(directory) / "reviews.json"
             reviews.write_text("[]", encoding="utf-8")
-            args = ["--reviewed-pairs", str(reviews), "--output", str(snapshot)]
+            candidates = Path(directory) / "candidates.json"
+            args = ["--reviewed-pairs", str(reviews), "--output", str(snapshot), "--review-candidates", str(candidates)]
             partial = response(200, {"markets": [{}], "cursor": "next"})
             failures = [partial] + [response(503)] * 3
             with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=failures), mock.patch(
@@ -74,3 +76,28 @@ class ReliabilityTest(unittest.TestCase):
                 atomic_write(snapshot, fail)
             self.assertEqual(snapshot.read_text(encoding="utf-8"), "previous")
             self.assertEqual(list(Path(directory).iterdir()), [snapshot])
+
+    def test_reviewed_scan_reads_only_the_reviewed_market_ids(self):
+        fixture_path = Path(__file__).parent / "fixtures" / "scan.json"
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        now = datetime.fromisoformat(fixture["as_of"])
+        pages = [
+            response(200, {"markets": fixture["kalshi"], "cursor": ""}),
+            response(200, {"markets": fixture["polymarket"]}),
+        ]
+        with TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "opportunities.csv"
+            reviews = Path(directory) / "reviewed.json"
+            reviews.write_text(json.dumps(fixture["reviewed_pairs"]), encoding="utf-8")
+            args = ["--reviewed-pairs", str(reviews), "--output", str(snapshot)]
+            with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=pages) as get, mock.patch(
+                "src.Arbitrage.ai_filter.datetime", wraps=datetime
+            ) as clock, mock.patch("src.Arbitrage.ai_filter.price_pairs") as price, redirect_stdout(StringIO()):
+                clock.now.return_value = now
+                price.return_value = []
+                self.assertEqual(main(args), 0)
+                pair, = list(price.call_args.args[0])
+            self.assertEqual([leg["id"] for leg in pair], ["K-EXAMPLE", "P-EXAMPLE"])
+            queries = [call.kwargs["params"] for call in get.call_args_list]
+            self.assertEqual(queries, [{"tickers": "K-EXAMPLE"},
+                                       {"condition_ids": ["P-EXAMPLE"], "closed": "false", "limit": 100}])

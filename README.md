@@ -14,7 +14,10 @@ python -m unittest discover -s tests -v
 python -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
 ```
 
-The live scanner reads public markets closing in the next 30 days.
+Live discovery searches public markets closing within 24 hours. Use
+`--hours` to adjust the discovery window. When pricing a list of reviewed
+pairs, the scanner fetches those markets by ID and checks that they are
+still tradable and close within 30 days.
 
 ```sh
 python -m src.Arbitrage.ai_filter --review-candidates candidates.json
