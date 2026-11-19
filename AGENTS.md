@@ -9,6 +9,10 @@
 
 ## Agent skills
 
+### Frontend and UI
+
+Use `impeccable:impeccable` when designing, building, reviewing, or polishing frontend and UI work. Verify rendered changes at the supported screen sizes.
+
 ### Issue tracker
 
 Use GitHub Issues for SignalScout specs and tickets. See `docs/agents/issue-tracker.md`.
