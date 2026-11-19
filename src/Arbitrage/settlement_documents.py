@@ -53,7 +53,8 @@ def text_policy(body):
             contents = page.get_contents()
             if contents is None or "/Annots" in page or "/AA" in page:
                 return None
-            if any(operator not in TEXT_OPERATORS for _, operator in contents.operations):
+            if any(operator not in TEXT_OPERATORS or (operator == b"Tr" and operands != [0])
+                   for operands, operator in contents.operations):
                 return None
             page_text = page.extract_text().strip()
             if not page_text:
@@ -62,7 +63,9 @@ def text_policy(body):
         rules = " ".join(text)
         if VENUE_DEPENDENT.search(rules):
             return None
-        return normalize_settlement_terms(" ".join(rules.split()))
+        terms, sources = normalize_settlement_terms(" ".join(rules.split()))
+        if len(sources) <= 1:
+            return terms, sources
     except (PdfReadError, AttributeError, KeyError, TypeError, ValueError, OSError):
         return None
 

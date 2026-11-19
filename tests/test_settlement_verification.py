@@ -164,6 +164,11 @@ class SettlementVerificationTest(unittest.TestCase):
             self.assertEqual(len(report["manual_review"]), 1)
             self.assertFalse(report["different_rules"])
 
+    def test_pdf_does_not_normalize_conflicting_source_priority(self):
+        first = "Use https://example.com/primary as the official source."
+        second = "Use https://example.com/alternative as the official source."
+        self.assertIsNone(pdf(f"{first} {second}").policy)
+
     @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
     def test_cancellation_only_in_independent_pdfs(self, _):
         left, right = contracts(rulebook=OTHER_BOOK)
