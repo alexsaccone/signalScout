@@ -1,6 +1,4 @@
-TODO:
-
-- Establish and evaluate a pregame sports prediction baseline.
+# SignalScout
 
 ## Market dashboard
 
@@ -75,3 +73,24 @@ than 60 seconds and unsupported fee models are skipped.
 
 A complete scan with no opportunities writes a header-only CSV. A failed or
 incomplete scan exits with status 1 and preserves the previous snapshot.
+
+## Pregame sports baseline
+
+Run the historical Setka table-tennis evaluation from the repository root.
+
+```powershell
+.\.venv\Scripts\python.exe -m src.ML.model
+```
+
+On macOS and Linux, use `python` from the activated environment. The evaluator
+uses Elo player ratings from prior dates to predict each match. After a
+day is complete, its results update the ratings for future days. The output
+includes calibration bins, Brier score, log loss, and comparison with constant
+50% predictions. Use `--test-start YYYY-MM-DD` to set another holdout start date.
+
+On the bundled 2022 data, the default July 3–8 holdout has 1,598 matches after
+one same-name match and four duplicate records were excluded from the full
+dataset. The baseline scored 0.2468 Brier and 0.6869 log loss, compared with
+0.2500 and 0.6931 for constant 50% predictions. In the 60–80% prediction bin,
+the observed win rate was 58.6% across 297 matches. The dashboard shows venue
+odds. This historical evaluation does not establish performance on current games.
