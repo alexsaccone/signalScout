@@ -148,5 +148,58 @@
         ]
       }
     }
-  }
+  },
+  "odds": [
+    {
+      "sportsMarketType": "moneyline",
+      "closed": false,
+      "active": true,
+      "acceptingOrders": true,
+      "slug": "nhl-falcons-foxes",
+      "question": "Falcons vs. Foxes",
+      "gameStartTime": "2026-11-19 02:30:00+00",
+      "outcomes": [
+        "Falcons",
+        "Foxes"
+      ],
+      "outcomePrices": [
+        "0.56",
+        "0.44"
+      ]
+    },
+    {
+      "sportsMarketType": "moneyline",
+      "closed": false,
+      "active": true,
+      "acceptingOrders": true,
+      "slug": "nba-comets-bears",
+      "question": "Comets vs. Bears",
+      "gameStartTime": "2026-11-19 23:00:00+00",
+      "outcomes": [
+        "Comets",
+        "Bears"
+      ],
+      "outcomePrices": [
+        "0.42",
+        "0.58"
+      ]
+    },
+    {
+      "sportsMarketType": "moneyline",
+      "closed": false,
+      "active": true,
+      "acceptingOrders": true,
+      "slug": "nfl-ravens-wolves",
+      "question": "Ravens vs. Wolves",
+      "gameStartTime": "2026-11-20 01:15:00+00",
+      "outcomes": [
+        "Ravens",
+        "Wolves"
+      ],
+      "outcomePrices": [
+        "0.67",
+        "0.33"
+      ]
+    }
+  ]
 }
