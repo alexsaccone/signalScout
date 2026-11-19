@@ -99,11 +99,10 @@ def normalize_condition(condition):
         comparison = STAT_COMPARISON[prefix or suffix.strip()]
         condition = f"{player} records {comparison} {prefixed_number or suffixed_number} {unit}" + condition[stat.end():]
 
-    matchup = MATCHUP.search(condition)
-    if matchup:
-        name = re.sub(r" (?:vs\.?|versus) ", " vs ", matchup[0])
-        condition = condition[:matchup.start()] + name + condition[matchup.end():]
-    return condition
+    parts = QUOTED.split(condition)
+    for index in range(0, len(parts), 2):
+        parts[index] = MATCHUP.sub(lambda m: re.sub(r" (?:vs\.?|versus) ", " vs ", m[0]), parts[index])
+    return "".join(parts)
 
 
 def normalize_settlement_terms(remaining):

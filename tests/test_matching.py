@@ -107,6 +107,12 @@ class MatchingTest(unittest.TestCase):
         poly["rules"] = poly["rules"].replace("at least 20 points", '"20 or more points"')
         self.assertEqual(review_candidates([kalshi], [poly]), [])
 
+        kalshi, poly = self.matching_contracts()
+        phrase = "Boston Celtics vs Miami Heat game"
+        kalshi["rules"] = kalshi["rules"].replace(phrase, f'"{phrase}" in Game 1')
+        poly["rules"] = poly["rules"].replace(phrase, f'"{phrase.replace("vs", "versus")}" in Game 1')
+        self.assertEqual(review_candidates([kalshi], [poly]), [])
+
     def test_requires_a_confirmed_settlement_source(self):
         kalshi, poly = self.matching_contracts()
         self.assertEqual(review_candidates([dict(kalshi, secondary_rules="")], [poly]), [])
