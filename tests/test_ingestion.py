@@ -3,6 +3,7 @@ import unittest
 from unittest import mock
 
 from src.Arbitrage.api import more_kalshi, more_poly, normalize_market
+from src.Arbitrage.searcher import filter_polymarket_events
 
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
@@ -41,13 +42,13 @@ class IngestionTest(unittest.TestCase):
                 self.assertIsNone(normalize_market(payload, venue, NOW))
 
     def test_kalshi_skips_malformed_row_and_keeps_other_results(self):
-        with mock.patch("src.Arbitrage.api.requests.get") as get, self.assertLogs(level="WARNING"):
+        with mock.patch("src.Arbitrage.api.requests.Session.get") as get, self.assertLogs(level="WARNING"):
             get.return_value.json.return_value = {"markets": [{"bad": "record"}, KALSHI], "cursor": ""}
             self.assertEqual([market["id"] for market in more_kalshi(2, NOW)], ["K-EXAMPLE"])
         self.assertEqual(get.call_args.kwargs["params"]["min_close_ts"], int(NOW.timestamp()))
 
     def test_polymarket_requests_the_next_cursor(self):
-        with mock.patch("src.Arbitrage.api.requests.get") as get:
+        with mock.patch("src.Arbitrage.api.requests.Session.get") as get:
             requests_made = []
             get.side_effect = lambda url, params, timeout: requests_made.append(dict(params)) or mock.Mock(
                 json=mock.Mock(side_effect=[{"markets": [POLY], "next_cursor": "next"}] if len(requests_made) == 1
@@ -55,3 +56,12 @@ class IngestionTest(unittest.TestCase):
             )
             self.assertEqual(len(more_poly(2, NOW)), 1)
         self.assertEqual(requests_made[1]["after_cursor"], "next")
+
+    def test_polymarket_default_scan_can_cross_the_old_page_limit(self):
+        payloads = [{"markets": [POLY], "next_cursor": str(index)} for index in range(51)]
+        payloads.append({"markets": []})
+        with mock.patch("src.Arbitrage.api.requests.Session.get") as get:
+            get.return_value.json.side_effect = payloads
+            self.assertEqual(len(filter_polymarket_events(NOW)), 51)
+        self.assertEqual(get.call_count, 52)
+        self.assertEqual(get.call_args.kwargs["params"]["limit"], 100)

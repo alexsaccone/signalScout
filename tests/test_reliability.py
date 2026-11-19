@@ -35,7 +35,7 @@ class ReliabilityTest(unittest.TestCase):
     def test_cursor_loop_and_page_limit_are_incomplete(self):
         page = response(200, {"markets": [{}], "cursor": "next"})
         for cap, message in ((1, "page limit"), (2, "repeated pagination cursor")):
-            with self.subTest(cap=cap), mock.patch("src.Arbitrage.api.requests.get", return_value=page):
+            with self.subTest(cap=cap), mock.patch("src.Arbitrage.api.requests.Session.get", return_value=page):
                 with self.assertRaisesRegex(ScanError, message):
                     more_kalshi(cap, datetime.now(timezone.utc))
 
@@ -48,7 +48,7 @@ class ReliabilityTest(unittest.TestCase):
             args = ["--reviewed-pairs", str(reviews), "--output", str(snapshot)]
             partial = response(200, {"markets": [{}], "cursor": "next"})
             failures = [partial] + [response(503)] * 3
-            with mock.patch("src.Arbitrage.api.requests.get", side_effect=failures), mock.patch(
+            with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=failures), mock.patch(
                 "src.Arbitrage.api.sleep"
             ), redirect_stderr(StringIO()) as error:
                 self.assertEqual(main(args), 1)
@@ -56,7 +56,7 @@ class ReliabilityTest(unittest.TestCase):
             self.assertEqual(snapshot.read_bytes(), b"previous snapshot\n")
 
             empty = [response(200, {"markets": [], "cursor": ""}), response(200, {"markets": []})]
-            with mock.patch("src.Arbitrage.api.requests.get", side_effect=empty), redirect_stdout(StringIO()) as output:
+            with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=empty), redirect_stdout(StringIO()) as output:
                 self.assertEqual(main(args), 0)
                 self.assertIn("0 opportunities", output.getvalue())
             with snapshot.open(newline="", encoding="utf-8") as output:
