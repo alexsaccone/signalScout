@@ -1,5 +1,6 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
+from heapq import nsmallest
 import re
 
 if __package__:
@@ -123,10 +124,9 @@ def normalize_settlement_terms(remaining):
     return normalize_rule_text(remaining), frozenset(sources)
 
 
-def settlement_key(market):
+def published_condition(market):
     try:
         rules = normalize_rule_text(market["rules"])
-        secondary = normalize_rule_text(market["secondary_rules"])
     except ValueError:
         return None
     fixture = SCHEDULED_FIXTURE.match(rules)
@@ -142,13 +142,24 @@ def settlement_key(market):
     condition = payout[1]
     if fixture:
         condition += f" in the {first} vs {second} {league} {event_type} on {day} at {starts_at}"
+    return condition, rules[payout.end():]
+
+
+def settlement_key(market):
+    parsed = published_condition(market)
+    if not parsed:
+        return None
+    condition, remaining = parsed
     if not re.search(DATED, condition) or UNNAMED.search(condition):
         return None
     if SPORT.search(condition) and not (MATCHUP.search(condition) and SPORTS_SESSION.search(condition)):
         return None
 
-    remaining = " ".join((rules[payout.end():], secondary)).strip()
-    remaining, declared_sources = normalize_settlement_terms(remaining)
+    try:
+        remaining = normalize_rule_text(f"{remaining} {market['secondary_rules']}")
+        remaining, declared_sources = normalize_settlement_terms(remaining)
+    except ValueError:
+        return None
     sources = declared_sources or {url.rstrip(".,;!?") for url in SOURCE_URL.findall(remaining)}
     resolution = market["resolution"]
     if len(declared_sources) > 1 or not sources:
@@ -174,6 +185,88 @@ def review_candidates(kalshi, polymarket):
             for right in by_settlement.get(settlement_key(left), ())
         )
     return candidates
+
+
+LEAD_STOP_WORDS = frozenset("""
+    the of and or a an to at for in is be will by on originally scheduled after
+    including does not include between professional soccer game match vs versus fc afc
+    am pm et est edt ct cst cdt time each during
+""".split())
+LEAD_WORD = re.compile(r"[^\W_]+")
+MAX_LEADS = 80
+MAX_POSTINGS = 120
+LEAD_TYPES = {
+    "score": re.compile(r"\bfinal score\b"),
+    "both teams score": re.compile(r"\bboth teams (?:to )?score\b"),
+    "margin": re.compile(r"\bwins? by (?:more than|at least)\b"),
+    "player goals": re.compile(r": \d+\+ goals?\??$"),
+    "winner": re.compile(r"\bwins?(?: (?:1st|2nd) half)?\??$|\bleading at halftime\b"),
+}
+
+
+def lead_type(title):
+    title = title.casefold()
+    kind = next((kind for kind, pattern in LEAD_TYPES.items() if pattern.search(title)), None)
+    if kind is None:
+        return None
+    if re.search(r"\b(?:1st half|first half|halftime)\b", title):
+        period = "first half"
+    elif re.search(r"\b(?:2nd half|second half)\b", title):
+        period = "second half"
+    else:
+        period = "full match"
+    return kind, period
+
+
+def lead_terms(market):
+    parsed = published_condition(market)
+    if not parsed:
+        return None
+    condition, _ = parsed
+    dates = set(re.findall(DATED, condition))
+    words = frozenset(LEAD_WORD.findall(re.sub(DATED, "", condition).casefold())) - LEAD_STOP_WORDS
+    if len(dates) == 1 and len(words) >= 3:
+        return dates.pop(), words
+
+
+def review_leads(kalshi, polymarket):
+    by_word = defaultdict(list)
+    poly_terms = []
+    for market in polymarket:
+        info = lead_terms(market)
+        if not info:
+            continue
+        day, words = info
+        index = len(poly_terms)
+        poly_terms.append((market, words, lead_type(market['title'])))
+        for word in words:
+            posting = by_word[day, word]
+            if len(posting) <= MAX_POSTINGS:
+                posting.append(index)
+
+    by_event = defaultdict(list)
+    for left in kalshi:
+        info = lead_terms(left)
+        if not info:
+            continue
+        day, words = info
+        postings = (by_word.get((day, word), ()) for word in words)
+        overlaps = Counter(i for posting in postings if len(posting) <= MAX_POSTINGS for i in posting)
+        best = by_event[left["event_id"]]
+        left_type = lead_type(left["title"])
+        for i, common in overlaps.items():
+            right, right_words, right_type = poly_terms[i]
+            if left_type and right_type and left_type != right_type:
+                continue
+            score = len(words & right_words) / len(words | right_words)
+            if common >= 3 and score >= 0.5:
+                best.append((-score, left["id"], right["id"], day, left, right))
+        best[:] = nsmallest(2, best, key=lambda lead: lead[:3])
+
+    ranked = nsmallest(MAX_LEADS, (lead for group in by_event.values() for lead in group),
+                       key=lambda lead: lead[:3])
+    return [{"event_date": day, "kalshi": market_terms(left), "polymarket": market_terms(right)}
+            for _, _, _, day, left, right in ranked]
 
 
 def verified_pairs(kalshi, polymarket, reviewed):
