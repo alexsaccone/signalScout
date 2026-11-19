@@ -96,7 +96,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Scan reviewed Kalshi and Polymarket pairs.")
     parser.add_argument("--fixture", type=Path, help="Replay local market responses and reviews.")
     parser.add_argument("--reviewed-pairs", type=Path, help="JSON array of reviewed contract pairs.")
-    parser.add_argument("--review-candidates", type=Path, help="Write similarly titled pairs for review.")
+    parser.add_argument("--review-candidates", type=Path, help="Write pairs with matching published settlement terms for review.")
     parser.add_argument("--hours", type=int, default=24, help="Hours ahead to search for candidates (default: 24).")
     parser.add_argument("--output", type=Path,
                         help="CSV destination (default: opportunities.csv or opportunities.example.csv with --fixture).")

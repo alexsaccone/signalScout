@@ -1,6 +1,5 @@
-from collections import Counter, defaultdict
-from functools import lru_cache
-from heapq import nsmallest
+from collections import defaultdict
+from datetime import date
 import re
 
 if __package__:
@@ -25,62 +24,86 @@ def market_terms(market):
     return terms
 
 
-COMMON_WORDS = frozenset({
-    "a", "an", "at", "be", "between", "by", "for", "game", "in", "is", "match",
-    "of", "on", "the", "this", "to", "versus", "vs", "will", "win", "winner", "wins",
-})
-TITLE_WORD = re.compile(r"\w+(?:\.\d+)?")
 MAX_SUGGESTIONS = 3
+DATED = r"\b\d{4}-\d{2}-\d{2}\b"
+IF_YES = re.compile(
+    r'^If (.+?), (?:then )?(?:the|this) market (?:will resolve|resolves) to "?Yes"?\.(?: |$)', re.I,
+)
+YES_IF = r'^This market (?:will resolve|resolves) to "?Yes"? if ('
+INLINE_YES = re.compile(rf'{YES_IF}.*?{DATED}.*?)\.(?: |$)', re.I)
+FIXTURE_YES = re.compile(rf'{YES_IF}.+?)\.(?: |$)', re.I)
+SCHEDULED_FIXTURE = re.compile(
+    rf"^In the upcoming (.+?) (game|match) between (.+?) and (.+?), "
+    rf"(?:originally )?scheduled for (?:[A-Za-z]+day, )?({DATED}) at "
+    rf"(\d{{1,2}}(?::\d{{2}})? [AP]M [A-Z]{{2,4}})"
+    rf"(?: \(as of creation of the first market related to the event\))?: ",
+)
+MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+MONTH_NUMBER = {name.lower(): index for index, month in enumerate(MONTHS, 1) for name in (month, month[:3])}
+EVENT_DATE = re.compile(rf"\b({'|'.join(MONTH_NUMBER)})\.? (\d{{1,2}}),? (\d{{4}})\b", re.I)
+SPORT = re.compile(r"\b(?:game|match|teams?|player|touchdowns?|goals?|innings?)\b", re.I)
+MATCHUP = re.compile(r"\b[A-Z][\w'’-]*(?: [A-Z][\w'’-]*)* (?:vs\.?|versus) [A-Z][\w'’-]*")
+SPORTS_SESSION = re.compile(r"\b(?:\d{1,2}(?::\d{2})? [ap]m [A-Z]{2,4}|(?:game|leg) \d+)\b", re.I)
+UNNAMED = re.compile(r"\b(?:listed|selected|specified) (?:player|team)\b|\bthe (?:home team|away team|player)\b", re.I)
+SOURCE_URL = re.compile(r'https?://[^\s<>()"]+')
 
 
-def title_words(market):
-    return frozenset(TITLE_WORD.findall(market["title"].casefold())) - COMMON_WORDS
+def iso_date(match):
+    month, day, year = match.groups()
+    return date(int(year), MONTH_NUMBER[month.lower()], int(day)).isoformat()
+
+
+def settlement_key(market):
+    try:
+        rules = EVENT_DATE.sub(iso_date, " ".join(market["rules"].split()))
+        secondary = EVENT_DATE.sub(iso_date, " ".join(market["secondary_rules"].split()))
+    except ValueError:
+        return None
+    fixture = SCHEDULED_FIXTURE.match(rules)
+    if fixture:
+        league, event_type, first, second, day, starts_at = fixture.groups()
+        rules = rules[fixture.end():]
+        payout = IF_YES.match(rules) or FIXTURE_YES.match(rules)
+    else:
+        payout = IF_YES.match(rules) or INLINE_YES.match(rules)
+    if not payout:
+        return None
+
+    condition = payout[1]
+    if fixture:
+        condition += f" in the {first} vs {second} {league} {event_type} on {day} at {starts_at}"
+    if not re.search(DATED, condition) or UNNAMED.search(condition):
+        return None
+    if SPORT.search(condition) and not (MATCHUP.search(condition) and SPORTS_SESSION.search(condition)):
+        return None
+
+    remaining = " ".join((rules[payout.end():], secondary)).strip()
+    sources = {url.rstrip(".,;!?") for url in SOURCE_URL.findall(remaining)}
+    resolution = market["resolution"]
+    if not sources or (isinstance(resolution, str) and resolution and resolution.strip() not in sources):
+        return None
+
+    # Reconcile common venue wrappers and date formats. Compare the complete
+    # condition and all subsequent clauses, including any exception or deadline.
+    return condition, remaining
 
 
 def review_candidates(kalshi, polymarket):
-    markets = [(market, title_words(market)) for market in sorted(polymarket, key=lambda market: market["id"])
-               if market["rules"].strip()]
-    by_title = defaultdict(list)
-    by_word = defaultdict(list)
-    max_postings = max(50, len(markets) // 10)
-    for index, (_, words) in enumerate(markets):
-        day = markets[index][0]["close_time"].date().toordinal()
-        exact = by_title[day, words]
-        if len(exact) < MAX_SUGGESTIONS:
-            exact.append(index)
-        for word in words:
-            posting = by_word[word]
-            if len(posting) <= max_postings:
-                posting.append(index)
-
-    @lru_cache(maxsize=1024)
-    def shortlist(day, words):
-        days = range(day - 1, day + 2)
-        exact = sorted(index for nearby in days for index in by_title.get((nearby, words), ()))
-        if len(exact) >= MAX_SUGGESTIONS:
-            return exact[:MAX_SUGGESTIONS]
-        hits = Counter(index for word in words if len(by_word.get(word, ())) <= max_postings
-                       for index in by_word.get(word, ()))
-
-        def fuzzy_scores():
-            for index, overlap in hits.items():
-                right, right_words = markets[index]
-                if overlap >= 2 and right_words != words and right["close_time"].date().toordinal() in days:
-                    score = len(words & right_words) / len(words | right_words)
-                    if score >= 0.5:
-                        yield -score, index
-
-        return exact + [index for _, index in nsmallest(MAX_SUGGESTIONS - len(exact), fuzzy_scores())]
+    by_settlement = defaultdict(list)
+    for market in sorted(polymarket, key=lambda market: market["id"]):
+        key = settlement_key(market)
+        if key is not None and len(by_settlement[key]) < MAX_SUGGESTIONS:
+            by_settlement[key].append(market)
 
     candidates = []
     for left in kalshi:
-        words = title_words(left)
-        if words and left["rules"].strip():
-            day = left["close_time"].date().toordinal()
-            candidates.extend(
-                {"kalshi": market_terms(left), "polymarket": market_terms(markets[index][0])}
-                for index in shortlist(day, words)
-            )
+        candidates.extend(
+            {"kalshi": market_terms(left), "polymarket": market_terms(right)}
+            for right in by_settlement.get(settlement_key(left), ())
+        )
     return candidates
 
 
