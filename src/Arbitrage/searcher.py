@@ -1,4 +1,6 @@
 from collections import Counter, defaultdict
+from functools import lru_cache
+from heapq import nsmallest
 import re
 
 if __package__:
@@ -23,40 +25,66 @@ def market_terms(market):
     return terms
 
 
+COMMON_WORDS = frozenset({
+    "a", "an", "at", "be", "between", "by", "for", "game", "in", "is", "match",
+    "of", "on", "the", "this", "to", "versus", "vs", "will", "win", "winner", "wins",
+})
+TITLE_WORD = re.compile(r"\w+(?:\.\d+)?")
+MAX_SUGGESTIONS = 3
+
+
 def title_words(market):
-    common = {
-        "a", "an", "at", "be", "between", "by", "for", "game", "in", "is", "match",
-        "of", "on", "the", "this", "to", "versus", "vs", "will", "win", "winner", "wins",
-    }
-    return frozenset(re.findall(r"\w+(?:\.\d+)?", market["title"].casefold())) - common
+    return frozenset(TITLE_WORD.findall(market["title"].casefold())) - COMMON_WORDS
 
 
 def review_candidates(kalshi, polymarket):
-    markets = [(market, title_words(market)) for market in polymarket if market["rules"].strip()]
+    markets = [(market, title_words(market)) for market in sorted(polymarket, key=lambda market: market["id"])
+               if market["rules"].strip()]
     by_title = defaultdict(list)
     by_word = defaultdict(list)
+    max_postings = max(50, len(markets) // 10)
     for index, (_, words) in enumerate(markets):
-        by_title[words].append(index)
+        day = markets[index][0]["close_time"].date().toordinal()
+        exact = by_title[day, words]
+        if len(exact) < MAX_SUGGESTIONS:
+            exact.append(index)
         for word in words:
-            by_word[word].append(index)
+            posting = by_word[day, word]
+            if len(posting) <= max_postings:
+                posting.append(index)
+
+    @lru_cache(maxsize=1024)
+    def shortlist(day, words):
+        days = range(day - 1, day + 2)
+        exact = sorted(index for nearby in days for index in by_title.get((nearby, words), ()))
+        if len(exact) >= MAX_SUGGESTIONS:
+            return exact[:MAX_SUGGESTIONS]
+        hits = Counter()
+        for nearby in days:
+            for word in words:
+                posting = by_word.get((nearby, word), ())
+                if len(posting) <= max_postings:
+                    hits.update(posting)
+
+        def fuzzy_scores():
+            for index, overlap in hits.items():
+                right_words = markets[index][1]
+                if overlap >= 2 and right_words != words:
+                    score = len(words & right_words) / len(words | right_words)
+                    if score >= 0.5:
+                        yield -score, index
+
+        return exact + [index for _, index in nsmallest(MAX_SUGGESTIONS - len(exact), fuzzy_scores())]
 
     candidates = []
-    max_postings = max(50, len(markets) // 10)
     for left in kalshi:
         words = title_words(left)
-        if not words or not left["rules"].strip():
-            continue
-        hits = Counter(index for word in words if len(by_word[word]) <= max_postings for index in by_word[word])
-        shortlist = set(by_title[words]) | {index for index, count in hits.items() if count >= 2}
-        scores = []
-        for index in shortlist:
-            right_words = markets[index][1]
-            score = len(words & right_words) / len(words | right_words)
-            if score >= 0.5:
-                scores.append((score, index))
-        scores.sort(key=lambda item: (-item[0], markets[item[1]][0]["id"]))
-        for _, index in scores[:3]:
-            candidates.append({"kalshi": market_terms(left), "polymarket": market_terms(markets[index][0])})
+        if words and left["rules"].strip():
+            day = left["close_time"].date().toordinal()
+            candidates.extend(
+                {"kalshi": market_terms(left), "polymarket": market_terms(markets[index][0])}
+                for index in shortlist(day, words)
+            )
     return candidates
 
 

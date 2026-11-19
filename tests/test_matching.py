@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import timedelta
 import json
 import unittest
 
@@ -30,6 +31,14 @@ class MatchingTest(unittest.TestCase):
         candidate, = review_candidates([kalshi], [other, poly])
         self.assertEqual(candidate["polymarket"]["title"], poly["title"])
         self.assertEqual(list(verified_pairs([kalshi], [poly], [])), [])
+
+    def test_discovery_keeps_nearby_closes_and_bounds_repeat_title_results(self):
+        title = self.poly["title"]
+        far = dict(self.poly, id="P-0", close_time=self.poly["close_time"] + timedelta(days=2))
+        nearby = [dict(self.poly, id=f"P-{index:03d}", title=title,
+                       close_time=self.poly["close_time"] + timedelta(days=1)) for index in range(100)]
+        matches = review_candidates([self.kalshi], [far] + list(reversed(nearby)))
+        self.assertEqual([pair["polymarket"]["id"] for pair in matches], ["P-000", "P-001", "P-002"])
 
     def test_market_terms_change_invalidates_the_review(self):
         for changed in (
