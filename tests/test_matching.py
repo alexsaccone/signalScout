@@ -69,6 +69,50 @@ class MatchingTest(unittest.TestCase):
         wrong = dict(right, rules=right["rules"].replace("and Miami Heat", "and Milwaukee Bucks"))
         self.assertEqual(review_candidates([left], [wrong]), [])
 
+    def test_paraphrased_point_threshold_and_settlement_clauses(self):
+        kalshi, poly = self.matching_contracts()
+        source = "https://www.nba.com/stats"
+        kalshi["secondary_rules"] += " Otherwise, this market will resolve to No."
+        poly["rules"] = (
+            'In the upcoming NBA game between Boston Celtics and Miami Heat, scheduled for '
+            'Nov. 20, 2026 at 7:00 p.m. ET: This market will resolve to "Yes" if Alex Example '
+            'records 20 or more points. If the game is cancelled, this market will resolve to '
+            '"50-50." Otherwise, this market will resolve to "No." '
+            f'The resolution source for this market is {source}.'
+        )
+        kalshi["rules"] = kalshi["rules"].replace("vs Miami Heat game on", "versus Miami Heat NBA game on")
+        candidate, = review_candidates([kalshi], [poly])
+        self.assertEqual(candidate["polymarket"]["rules"], poly["rules"])
+        self.assertEqual(list(verified_pairs([kalshi], [poly], [])), [])
+
+        for old, new in (
+            ("20 or more", "more than 20"), ("records 20 or more", "records exactly 20"),
+            ("20 or more points", "20 or more assists"), ("Alex Example", "Alex Samples"),
+            ("50-50", "a fair market price"), ("is cancelled", "is postponed"),
+            ('"No."', '"Yes."'), ("7:00 p.m.", "7:10 p.m."),
+            (source, "https://example.org/stats"),
+        ):
+            with self.subTest(term=old):
+                changed = dict(poly, rules=poly["rules"].replace(old, new))
+                self.assertEqual(review_candidates([kalshi], [changed]), [])
+
+    def test_unrecognized_deadline_and_quoted_condition_stay_distinct(self):
+        kalshi, poly = self.matching_contracts()
+        kalshi["secondary_rules"] += " If no score is posted within 48 hours, settle at 50-50."
+        poly["rules"] += " If no score is posted within 72 hours, settle at 50-50."
+        self.assertEqual(review_candidates([kalshi], [poly]), [])
+
+        kalshi, poly = self.matching_contracts()
+        kalshi["rules"] = kalshi["rules"].replace("at least 20 points", '"at least 20 points"')
+        poly["rules"] = poly["rules"].replace("at least 20 points", '"20 or more points"')
+        self.assertEqual(review_candidates([kalshi], [poly]), [])
+
+        kalshi, poly = self.matching_contracts()
+        phrase = "Boston Celtics vs Miami Heat game"
+        kalshi["rules"] = kalshi["rules"].replace(phrase, f'"{phrase}" in Game 1')
+        poly["rules"] = poly["rules"].replace(phrase, f'"{phrase.replace("vs", "versus")}" in Game 1')
+        self.assertEqual(review_candidates([kalshi], [poly]), [])
+
     def test_requires_a_confirmed_settlement_source(self):
         kalshi, poly = self.matching_contracts()
         self.assertEqual(review_candidates([dict(kalshi, secondary_rules="")], [poly]), [])

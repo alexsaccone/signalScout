@@ -54,7 +54,9 @@ Live discovery pulls public Kalshi and Polymarket markets closing within
 command checks the dated event, participants, affirmative outcome, and published
 settlement terms, including the result source and exceptions. It writes pairs
 whose terms it can match to `candidates.json` for manual review. Discovery
-skips rule formats it cannot compare, so the list can miss equivalent contracts.
+recognizes equivalent player-stat thresholds, start times, settlement-source
+statements, and common payout wording. It compares unsupported clauses as
+written, so the list can still miss equivalent contracts.
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --review-candidates candidates.json
