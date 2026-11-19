@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
 import json
 import logging
 
@@ -22,6 +21,12 @@ def binary_values(value):
     return values
 
 
+def fetch_json(url, params=None):
+    response = requests.get(url, params=params, timeout=15)
+    response.raise_for_status()
+    return response.json(), response.headers
+
+
 def normalize_market(market, venue, now):
     try:
         if venue == "kalshi":
@@ -42,8 +47,6 @@ def normalize_market(market, venue, now):
                     "strike_type", "floor_strike", "cap_strike", "functional_strike",
                     "occurrence_datetime", "early_close_condition",
                 ) if market.get(key) is not None} or "",
-                "yes_ask": Decimal(market["yes_ask_dollars"]),
-                "no_ask": Decimal(market["no_ask_dollars"]),
                 "close_time": close,
             }
         else:
@@ -57,7 +60,6 @@ def normalize_market(market, venue, now):
             if (not all(isinstance(token, str) and token.isascii() and token.isdigit() for token in tokens.values())
                     or tokens["yes"] == tokens["no"]):
                 raise ValueError("Invalid outcome tokens")
-            prices = dict(zip(outcomes, map(Decimal, binary_values(market["outcomePrices"]))))
             normalized = {
                 "id": market["conditionId"],
                 "title": market["question"],
@@ -66,18 +68,18 @@ def normalize_market(market, venue, now):
                 "secondary_rules": "",
                 "resolution": market.get("resolutionSource") or "",
                 "tokens": tokens,
-                "yes_ask": prices["yes"],
-                "no_ask": prices["no"],
+                "fees_enabled": market.get("feesEnabled"),
                 "close_time": close,
             }
-        if not all(isinstance(normalized[key], str) and normalized[key].strip() for key in ("id", "title")):
+        keys = ("id", "title", "event_id") if venue == "kalshi" else ("id", "title")
+        if not all(isinstance(normalized[key], str) and normalized[key].strip() for key in keys):
             raise ValueError("Missing market ID or title")
         if not all(isinstance(normalized[key], str) for key in ("rules", "secondary_rules", "subtitle")):
             raise ValueError("Invalid market text")
         if not now < close <= now + SCAN_WINDOW:
             return None
         return normalized
-    except (AttributeError, KeyError, TypeError, ValueError, InvalidOperation) as error:
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
         logging.warning("Skipping malformed %s market (%s)", venue, type(error).__name__)
         return None
 
@@ -86,9 +88,7 @@ def more_kalshi(pages, now):
     markets = []
     params = {"limit": 200, "status": "open", "mve_filter": "exclude"}
     for _ in range(pages):
-        response = requests.get(f"{KALSHI_URL}/markets", params=params, timeout=15)
-        response.raise_for_status()
-        payload = response.json()
+        payload, _ = fetch_json(f"{KALSHI_URL}/markets", params)
         markets.extend(payload["markets"])
         cursor = payload.get("cursor")
         if not cursor:
@@ -105,9 +105,7 @@ def more_poly(pages, now):
         "end_date_max": (now + SCAN_WINDOW).isoformat(),
     }
     for _ in range(pages):
-        response = requests.get(f"{GAMMA_URL}/markets/keyset", params=params, timeout=15)
-        response.raise_for_status()
-        payload = response.json()
+        payload, _ = fetch_json(f"{GAMMA_URL}/markets/keyset", params)
         markets.extend(payload["markets"])
         cursor = payload.get("next_cursor")
         if not cursor:

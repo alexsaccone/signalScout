@@ -20,3 +20,8 @@ Copy pairs with equivalent outcomes and settlement rules into a JSON array, then
 pass it as `--reviewed-pairs reviewed.json`. Pairs whose listed terms or outcome
 tokens change require a fresh review. The fixture shows the file format under
 `reviewed_pairs`.
+
+The scanner uses the best available buy price and size on each order book,
+venue taker fees, and whole matched contracts. The CSV reports the older of
+the two quote times and estimated net return as a percentage. Quotes older
+than 60 seconds and unsupported fee models are skipped.

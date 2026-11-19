@@ -61,5 +61,92 @@
         }
       }
     }
-  ]
+  ],
+  "quotes": {
+    "https://external-api.kalshi.com/trade-api/v2/events/K-EVENT": {
+      "body": {
+        "event": {
+          "series_ticker": "K-SERIES"
+        }
+      }
+    },
+    "https://external-api.kalshi.com/trade-api/v2/series/K-SERIES": {
+      "body": {
+        "series": {
+          "fee_type": "quadratic",
+          "fee_multiplier": 1
+        }
+      }
+    },
+    "https://external-api.kalshi.com/trade-api/v2/markets/K-EXAMPLE/orderbook?depth=1": {
+      "headers": {
+        "Date": "Thu, 19 Nov 2026 00:00:00 GMT"
+      },
+      "body": {
+        "orderbook_fp": {
+          "no_dollars": [
+            [
+              "0.60",
+              "20"
+            ]
+          ],
+          "yes_dollars": [
+            [
+              "0.40",
+              "20"
+            ]
+          ]
+        }
+      }
+    },
+    "https://clob.polymarket.com/clob-markets/P-EXAMPLE": {
+      "body": {
+        "c": "P-EXAMPLE",
+        "t": [
+          {
+            "o": "No",
+            "t": "10"
+          },
+          {
+            "o": "Yes",
+            "t": "20"
+          }
+        ],
+        "fd": {
+          "r": 0.04,
+          "e": 1
+        }
+      }
+    },
+    "https://clob.polymarket.com/book?token_id=10": {
+      "body": {
+        "asset_id": "10",
+        "timestamp": "1795046400000",
+        "min_order_size": "5",
+        "asks": [
+          {
+            "price": "0.6",
+            "size": "50"
+          },
+          {
+            "price": "0.5",
+            "size": "10.9"
+          }
+        ]
+      }
+    },
+    "https://clob.polymarket.com/book?token_id=20": {
+      "body": {
+        "asset_id": "20",
+        "timestamp": "1795046400000",
+        "min_order_size": "5",
+        "asks": [
+          {
+            "price": "0.5",
+            "size": "10"
+          }
+        ]
+      }
+    }
+  }
 }

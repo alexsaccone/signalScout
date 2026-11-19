@@ -3,13 +3,24 @@ import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from urllib.parse import urlencode
 
 if __package__:
     from .api import normalize_market, utc_timestamp
-    from .searcher import OUTPUT_FIELDS, arbitrage_analysis, filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
+    from .pricing import OUTPUT_FIELDS, price_pairs
+    from .searcher import filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
 else:
     from api import normalize_market, utc_timestamp
-    from searcher import OUTPUT_FIELDS, arbitrage_analysis, filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
+    from pricing import OUTPUT_FIELDS, price_pairs
+    from searcher import filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
+
+
+def fixture_quotes(responses):
+    def fetch(url, params=None):
+        key = f"{url}?{urlencode(params)}" if params else url
+        response = responses[key]
+        return response["body"], response.get("headers", {})
+    return fetch
 
 
 def main(argv=None):
@@ -41,7 +52,12 @@ def main(argv=None):
         candidates = review_candidates(kalshi, poly)
         args.review_candidates.write_text(json.dumps(candidates, indent=2) + "\n", encoding="utf-8")
 
-    result = arbitrage_analysis(verified_pairs(kalshi, poly, reviews), now)
+    pairs = verified_pairs(kalshi, poly, reviews)
+    result = (
+        price_pairs(pairs, lambda: now, fixture_quotes(fixture["quotes"]))
+        if args.fixture
+        else price_pairs(pairs, lambda: datetime.now(timezone.utc))
+    )
     with args.output.open("w", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=OUTPUT_FIELDS)
         writer.writeheader()
