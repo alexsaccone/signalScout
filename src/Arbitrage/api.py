@@ -38,6 +38,10 @@ def normalize_market(market, venue, now):
                 "subtitle": market.get("yes_sub_title") or market.get("subtitle") or "",
                 "rules": market.get("rules_primary") or "",
                 "secondary_rules": market.get("rules_secondary") or "",
+                "resolution": {key: market[key] for key in (
+                    "strike_type", "floor_strike", "cap_strike", "functional_strike",
+                    "occurrence_datetime", "early_close_condition",
+                ) if market.get(key) is not None} or "",
                 "yes_ask": Decimal(market["yes_ask_dollars"]),
                 "no_ask": Decimal(market["no_ask_dollars"]),
                 "close_time": close,
@@ -60,6 +64,7 @@ def normalize_market(market, venue, now):
                 "subtitle": "",
                 "rules": market.get("description") or "",
                 "secondary_rules": "",
+                "resolution": market.get("resolutionSource") or "",
                 "tokens": tokens,
                 "yes_ask": prices["yes"],
                 "no_ask": prices["no"],

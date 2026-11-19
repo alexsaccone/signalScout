@@ -1,14 +1,65 @@
-[
-  {
-    "kalshi": "Will Example A win?",
-    "polymarket": "Will Example A win?",
-    "similarity": 1.0,
-    "oddsK_yes": 40,
-    "oddsK_no": 60,
-    "oddsP_yes": 0.5,
-    "oddsP_no": 0.5,
-    "kalshi_close": "2099-12-01",
-    "polymarket_close": "2099-12-01",
-    "rulesK": "Settle on the official result for Example A."
-  }
-]
+{
+  "as_of": "2026-11-19T00:00:00Z",
+  "kalshi": [
+    {
+      "status": "active",
+      "market_type": "binary",
+      "ticker": "K-EXAMPLE",
+      "event_ticker": "K-EVENT",
+      "title": "Will Example A win?",
+      "rules_primary": "Resolves Yes if Example A wins the Nov 20 game.",
+      "yes_ask_dollars": "0.40",
+      "no_ask_dollars": "0.60",
+      "close_time": "2026-11-20T19:00:00Z"
+    }
+  ],
+  "polymarket": [
+    {
+      "active": true,
+      "closed": false,
+      "acceptingOrders": true,
+      "conditionId": "P-EXAMPLE",
+      "question": "Will Example A win?",
+      "description": "Resolves Yes if Example A wins Game 1 on Nov 20.",
+      "outcomes": [
+        "No",
+        "Yes"
+      ],
+      "clobTokenIds": [
+        "10",
+        "20"
+      ],
+      "outcomePrices": [
+        "0.5",
+        "0.5"
+      ],
+      "endDate": "2026-11-20T19:00:00Z"
+    }
+  ],
+  "reviewed_pairs": [
+    {
+      "kalshi": {
+        "subtitle": "",
+        "secondary_rules": "",
+        "resolution": "",
+        "close_time": "2026-11-20T19:00:00+00:00",
+        "id": "K-EXAMPLE",
+        "title": "Will Example A win?",
+        "rules": "Resolves Yes if Example A wins the Nov 20 game."
+      },
+      "polymarket": {
+        "subtitle": "",
+        "secondary_rules": "",
+        "resolution": "",
+        "close_time": "2026-11-20T19:00:00+00:00",
+        "id": "P-EXAMPLE",
+        "title": "Will Example A win?",
+        "rules": "Resolves Yes if Example A wins Game 1 on Nov 20.",
+        "tokens": {
+          "no": "10",
+          "yes": "20"
+        }
+      }
+    }
+  ]
+}
