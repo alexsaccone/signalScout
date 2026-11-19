@@ -6,23 +6,40 @@ TODO:
 
 ## Running the market scanner
 
-Use Python 3.12 in a virtual environment. Run the offline smoke test from the repository root.
+Run these commands from the repository root. The scanner uses Python 3.12.
+
+### Windows PowerShell
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
+```
+
+### macOS and Linux
 
 ```sh
+python3.12 -m venv .venv
+. .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 python -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
 ```
+
+### Live scans
 
 Live discovery searches public markets closing within 24 hours. Use
 `--hours` to adjust the discovery window. When pricing a list of reviewed
 pairs, the scanner fetches those markets by ID and checks that they are
 still tradable and close within 30 days.
 
-```sh
-python -m src.Arbitrage.ai_filter --review-candidates candidates.json
-python -m src.Arbitrage.ai_filter --reviewed-pairs reviewed.json --output opportunities.csv
+```powershell
+.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --review-candidates candidates.json
+.\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --reviewed-pairs reviewed.json --output opportunities.csv
 ```
+
+On macOS and Linux, use `python` from the activated environment in these commands.
 
 The first command exports similarly titled contracts for review. Copy pairs
 with equivalent outcomes and settlement rules into a JSON array in
