@@ -12,15 +12,18 @@ time. Polymarket odds cover games starting within three days.
 
 Every **Publish dashboard** run scans markets closing within 96 hours. The
 **settlement-review** artifact includes `assessment.json` with verified pairs,
-cancellation-only differences, and uncertain leads with the reason they need
-manual review. The scanner compares normalized market terms and retrieves
-Kalshi's binding series rulebook. Automatic verification requires Polymarket
-to explicitly adopt the same governing document and the published terms to
-match. Unfamiliar governing documents, missing evidence, and clauses the
-scanner cannot reconcile go to manual review. Resolution checks run in Python
-and use the venues' public APIs.
+cancellation-only differences, proven rule mismatches, and uncertain leads.
+The scanner compares normalized market terms and complete governing PDFs.
+When both markets reference governing PDFs, a pair can qualify through
+matching complete text under supported normalizations or an identical
+document. The scanner can also prove specific mismatches between published
+Polymarket rules and reviewed versions of Kalshi rulebooks. Incomplete,
+unfamiliar, or inconclusive evidence goes to manual review. Resolution checks
+run in Python against public venue APIs. The
+[AI review note](docs/settlement-ai-review.md) describes an optional human-review
+pilot for the uncertain cases.
 
-The workflow checks the verified market terms and the governing document again
+The workflow checks the verified market terms and both governing documents again
 before pricing. Automatically verified pairs are included in that run; its
 artifact records the evidence. Add confirmed manual reviews to
 `data/reviewed_pairs.json` via a pull request to include them on scheduled

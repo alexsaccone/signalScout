@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from functools import lru_cache
-from hashlib import sha256
 import re
 
 import requests
@@ -8,16 +7,15 @@ import requests
 if __package__:
     from .api import KALSHI_URL, ScanError, fetch_json
     from .searcher import QUOTED, review_candidates, settlement_key
+    from .settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
 else:
     from api import KALSHI_URL, ScanError, fetch_json
     from searcher import QUOTED, review_candidates, settlement_key
+    from settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
 
 
 # Only an explicit incorporation clause makes a linked document governing.
 CONTRACT_REFERENCE = re.compile(r"^Governing contract terms: (https://[^\s]+?\.pdf)\.?[ \t]*\r?$", re.M)
-OFFICIAL_RULEBOOK = re.compile(
-    r"https://(?:assets\.kalshi\.com|kalshi-public-docs\.s3\.amazonaws\.com)/contract_terms/[\w-]+\.pdf"
-)
 CANCELLATION = re.compile(
     r'^(?P<trigger>If the (?:game|match|fight|event) is cancell?ed,) '
     r'(?:settle at |(?:the|this) market (?:will resolve|resolves)(?: to)? )'
@@ -30,36 +28,56 @@ UNBOUND_TERM = re.compile(
 )
 DISCRETIONARY = re.compile(r"\b(?:fair (?:market )?price|refund|exchange discretion)\b", re.I)
 PAYOUT_MARKER = "\u241e"
-MAX_RULEBOOK_BYTES = 2_000_000
+# Page numbers for the full Kalshi versions that were checked for the
+# before-play cancellation rule. A revised PDF needs a fresh review.
+FAIR_PRICE_CANCELLATION = {
+    "03bfbad61dc5eb23caa715ed131af206a867f83462955544dbc0b87704ede4df": 4,  # SOCCER1H
+    "3f1d6cc1765afa3eb44d809107f24b939dcc68f71718dc38ffe13d354c3f4ce2": 4,  # SOCCERGAMEWIN
+    "f34c2e955eff1fac177ea529e223037a0ae7b40fb3ebdedba2d942c56190b4ec": 2,  # SOCCERWHOSTAT
+    "8a6dfb6eab4a6c7efea4a19889b440d3422ff8affcc516edbe1a63bb3406079d": 2,  # SOCCERENTITYSTAT
+    "5aeb2ccabe65f871b5e069b9d05091ae584521bfdb030b6523551ecc7d6aa7b2": 2,  # SOCCERSPREADS
+}
+KALSHI_CANCELLATION_SUMMARY = (
+    "If the game is cancelled or rescheduled to over 48 hours away, "
+    "the market will resolve to a fair price in accordance with the rules."
+)
+POLY_FIXED_CANCELLATION = re.compile(
+    r'(?:^|(?<=\. ))If the game is cancell?ed'
+    r'(?:, does not start by [^.]+? or is abandoned with no official result by that time)?'
+    r', this market will resolve(?: to)? (?:"(No|50-50)(?:\."|"\.)|(No|50-50)\.)(?= |$)'
+)
 
 
 def rulebook_url(series):
     if not re.fullmatch(r"[A-Z0-9]+", series):
         return None
     doc, _ = fetch_json(f"{KALSHI_URL}/series/{series}")
-    return doc["series"].get("contract_terms_url") or ""
-
-
-def rulebook_digest(url):
-    if not OFFICIAL_RULEBOOK.fullmatch(url):
-        return None
-    with requests.get(url, stream=True, allow_redirects=False, timeout=(5, 15)) as response:
-        if response.status_code != 200:
-            return None
-        body = bytearray()
-        for chunk in response.iter_content(65536):
-            body.extend(chunk)
-            if len(body) > MAX_RULEBOOK_BYTES:
-                return None
-    if not body.startswith(b"%PDF-") or not body.rstrip().endswith(b"%%EOF"):
-        return None
-    return sha256(body).hexdigest()
+    url = doc["series"].get("contract_terms_url")
+    return url if isinstance(url, str) and re.fullmatch(KALSHI_BOOK, url) else None
 
 
 def rule_matches(pattern, text):
     quoted = list(QUOTED.finditer(text))
     return {match.start(): match for match in pattern.finditer(text)
             if not any(span.start() < match.start() < span.end() for span in quoted)}
+
+
+def cancellation_mismatch(left, right, book):
+    page = FAIR_PRICE_CANCELLATION.get(book.sha256)
+    if page is None or CONTRACT_REFERENCE.search(right["rules"]):
+        return None
+    kalshi_text = " ".join(f"{left['rules']} {left['secondary_rules']}".split())
+    extra = kalshi_text.replace(KALSHI_CANCELLATION_SUMMARY, "")
+    if re.search(r"\b(?:cancel\w*|abandon\w*|no result|void|refund)\b", extra, re.I):
+        return None
+    polymarket_text = " ".join(right["rules"].split())
+    matches = list(rule_matches(POLY_FIXED_CANCELLATION, polymarket_text).values())
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    return {"scenario": "Canceled before play starts", "kalshi_payout": "last fair price",
+            "polymarket_payout": match[1] or match[2], "kalshi_rulebook_page": page,
+            "polymarket_clause": match[0]}
 
 
 def comparable_terms(market):
@@ -108,21 +126,21 @@ def document_lookup():
             return None
 
     @lru_cache(maxsize=None)
-    def digest(url):
+    def document(url):
         try:
-            return rulebook_digest(url) if url else None
+            return load_rulebook(url) if url else None
         except requests.RequestException:
             return None
 
-    return series_book, digest
+    return series_book, document
 
 
 def assessment_report(kalshi, polymarket, candidates, leads, now=None):
     report = {"generated_at": (now or datetime.now(timezone.utc)).isoformat(),
-              "verified": [], "cancellation_only": [], "manual_review": []}
+              "verified": [], "cancellation_only": [], "different_rules": [], "manual_review": []}
     markets = {market["id"]: market for market in kalshi + polymarket}
     explicit_books = [market for market in polymarket if CONTRACT_REFERENCE.search(market["rules"])]
-    series_book, digest = document_lookup()
+    series_book, document = document_lookup()
 
     @lru_cache(maxsize=None)
     def comparison(market_id):
@@ -142,21 +160,36 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         seen.add(ids)
         series = left["id"].split("-", 1)[0]
         url = series_book(series)
-        fingerprint = digest(url)
+        kalshi_book = document(url)
         k_terms, p_terms = map(comparison, ids)
-        evidence = {"kalshi_rulebook": url, "kalshi_sha256": fingerprint}
+        references = list(rule_matches(CONTRACT_REFERENCE, right["rules"]).values())
+        poly_url = references[0][1] if len(references) == 1 else None
+        poly_book = document(poly_url)
+        evidence = {"kalshi_rulebook": url, "kalshi_sha256": kalshi_book.sha256 if kalshi_book else None,
+                    "polymarket_rulebook": poly_url, "polymarket_sha256": poly_book.sha256 if poly_book else None}
         row = {"pair": {"kalshi": left, "polymarket": right}, "evidence": evidence}
-        if not fingerprint:
+        book_difference = book_cancellation_difference(kalshi_book, poly_book) if kalshi_book and poly_book else None
+        if not kalshi_book:
             reason = "The full Kalshi contract terms could not be retrieved."
-        elif not p_terms:
-            reason = "Polymarket did not supply comparable complete terms with an explicit governing document."
+        elif difference := cancellation_mismatch(left, right, kalshi_book):
+            row["difference"] = difference
+            evidence["polymarket_source"] = "inline_rules"
+            report["different_rules"].append(row)
+            continue
+        elif not p_terms or not poly_book:
+            reason = "The full criteria could not be established from the published Polymarket rules."
         elif not k_terms or k_terms[0] != p_terms[0]:
             reason = "The published settlement conditions or exceptions could not be shown to match."
-        elif digest(p_terms[1]) != fingerprint or (k_terms[1] and digest(k_terms[1]) != fingerprint):
-            reason = "The governing documents could not be shown to match."
+        elif not book_difference and not equivalent_rulebooks(kalshi_book, poly_book):
+            reason = "The complete governing documents could not be shown to be equivalent."
+        elif k_terms[1] and document(k_terms[1]) != kalshi_book:
+            reason = "The Kalshi market and series reference different governing terms."
+        elif book_difference and any(re.search(r"\b(?:cancel\w*|abandon\w*|refund|void)\b",
+                                              f"{leg['rules']} {leg['secondary_rules']}", re.I)
+                                     for leg in (left, right)):
+            reason = "Market-level cancellation clauses may override the governing documents."
         else:
-            evidence["polymarket_rulebook"] = p_terms[1]
-            left_payout, right_payout = k_terms[2], p_terms[2]
+            left_payout, right_payout = book_difference or (k_terms[2], p_terms[2])
             if (left_payout and right_payout and left_payout != right_payout
                     and not all(DISCRETIONARY.search(payout) for payout in (left_payout, right_payout))):
                 row["kalshi_cancellation"] = left_payout
@@ -173,13 +206,20 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
 
 
 def current_assessment_rows(rows):
-    series_book, digest = document_lookup()
+    series_book, document = document_lookup()
     for row in rows:
         evidence = row["evidence"]
         fingerprint = evidence.get("kalshi_sha256")
         series = row["pair"]["kalshi"]["id"].split("-", 1)[0]
         official_url = series_book(series)
-        if (fingerprint and official_url == evidence.get("kalshi_rulebook")
-                and digest(official_url) == fingerprint
-                and digest(evidence.get("polymarket_rulebook")) == fingerprint):
+        if not fingerprint or official_url != evidence.get("kalshi_rulebook"):
+            continue
+        kalshi_book = document(official_url)
+        if not kalshi_book or kalshi_book.sha256 != fingerprint:
+            continue
+        if evidence.get("polymarket_source") == "inline_rules":
+            yield row
+            continue
+        poly_book = document(evidence.get("polymarket_rulebook"))
+        if poly_book and poly_book.sha256 == evidence.get("polymarket_sha256", fingerprint):
             yield row

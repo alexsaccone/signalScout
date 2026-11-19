@@ -65,6 +65,9 @@ def live_pairs(reviews, report, now):
         (row["pair"]["kalshi"]["id"], row["pair"]["polymarket"]["id"]): row
         for row in current_assessment_rows(report.get("cancellation_only", []))
     }
+    rejected = [row for row in report.get("different_rules", []) if row["pair"] in reviews]
+    blocked = [row["pair"] for row in current_assessment_rows(rejected)]
+    reviews = [review for review in reviews if review not in blocked]
     checked = refresh_reviewed_pairs(reviews + [row["pair"] for row in verified] +
                                      [row["pair"] for row in differences.values()], now)
     priceable, cancellation = [], []
