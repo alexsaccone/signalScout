@@ -1,0 +1,14 @@
+[
+  {
+    "kalshi": "Will Example A win?",
+    "polymarket": "Will Example A win?",
+    "similarity": 1.0,
+    "oddsK_yes": 40,
+    "oddsK_no": 60,
+    "oddsP_yes": 0.5,
+    "oddsP_no": 0.5,
+    "kalshi_close": "2099-12-01",
+    "polymarket_close": "2099-12-01",
+    "rulesK": "Settle on the official result for Example A."
+  }
+]
