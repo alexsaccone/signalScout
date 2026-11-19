@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from itertools import batched
 import json
 import logging
 from time import sleep
@@ -62,7 +63,7 @@ def fetch_json(url, params=None, get=None):
             raise ScanError(f"{url}: HTTP {response.status_code} or invalid JSON") from error
 
 
-def normalize_market(market, venue, now):
+def normalize_market(market, venue, now, window=SCAN_WINDOW):
     try:
         if venue == "kalshi":
             if (market["status"] not in {"active", "open"} or market["market_type"] != "binary"
@@ -111,19 +112,19 @@ def normalize_market(market, venue, now):
             raise ValueError("Missing market ID or title")
         if not all(isinstance(normalized[key], str) for key in ("rules", "secondary_rules", "subtitle")):
             raise ValueError("Invalid market text")
-        if not now < close <= now + SCAN_WINDOW:
+        if not now < close <= now + window:
             return None
         return normalized
     except (AttributeError, KeyError, TypeError, ValueError) as error:
         raise ValueError(f"Malformed {venue} market ({type(error).__name__})") from error
 
 
-def normalize_markets(rows, venue, now):
+def normalize_markets(rows, venue, now, window=SCAN_WINDOW):
     result = []
     valid = malformed = 0
     for row in rows:
         try:
-            market = normalize_market(row, venue, now)
+            market = normalize_market(row, venue, now, window)
         except ValueError:
             malformed += 1
             continue
@@ -158,21 +159,33 @@ def market_rows(url, params, response_cursor, request_cursor, pages):
     raise ScanError(f"{url}: page limit reached before the end of the feed")
 
 
-def more_kalshi(pages, now):
+def more_kalshi(pages, now, window=SCAN_WINDOW):
     params = {
         "limit": 200, "mve_filter": "exclude",
         "min_close_ts": int(now.timestamp()),
-        "max_close_ts": int((now + SCAN_WINDOW).timestamp()),
+        "max_close_ts": int((now + window).timestamp()),
     }
     rows = market_rows(f"{KALSHI_URL}/markets", params, "cursor", "cursor", pages)
-    return normalize_markets(rows, "kalshi", now)
+    return normalize_markets(rows, "kalshi", now, window)
 
 
-def more_poly(pages, now):
+def more_poly(pages, now, window=SCAN_WINDOW):
     params = {
         "limit": 100, "closed": "false",
         "end_date_min": now.isoformat(),
-        "end_date_max": (now + SCAN_WINDOW).isoformat(),
+        "end_date_max": (now + window).isoformat(),
     }
     rows = market_rows(f"{GAMMA_URL}/markets/keyset", params, "next_cursor", "after_cursor", pages)
-    return normalize_markets(rows, "polymarket", now)
+    return normalize_markets(rows, "polymarket", now, window)
+
+
+def lookup_markets(ids, venue, now):
+    selected = []
+    for batch in batched(sorted(ids), 100):
+        if venue == "kalshi":
+            rows = market_rows(f"{KALSHI_URL}/markets", {"tickers": ",".join(batch)}, "cursor", "cursor", 2)
+        else:
+            params = {"condition_ids": list(batch), "closed": "false", "limit": 100}
+            rows = market_rows(f"{GAMMA_URL}/markets/keyset", params, "next_cursor", "after_cursor", 2)
+        selected.extend(market for market in normalize_markets(rows, venue, now) if market["id"] in ids)
+    return selected
