@@ -3,7 +3,8 @@ const MAX_AGE = 3 * 60 * 60 * 1000;
 export function validateSnapshot(snapshot) {
   if (!snapshot || !["live", "fixture"].includes(snapshot.source) ||
       !Number.isFinite(Date.parse(snapshot.generated_at)) ||
-      !Array.isArray(snapshot.odds) || !Array.isArray(snapshot.opportunities)) {
+      !Array.isArray(snapshot.odds) || !Array.isArray(snapshot.opportunities) ||
+      (snapshot.cancellation_only !== undefined && !Array.isArray(snapshot.cancellation_only))) {
     throw new Error("Invalid dashboard snapshot");
   }
   return snapshot;
@@ -26,7 +27,8 @@ export function dashboardState(snapshot, now) {
     ...row,
     expired: stale || !(Date.parse(row.valid_until) > asOf),
   }));
-  return { fixture, stale, games, opportunities };
+  const cancellationOnly = (snapshot.cancellation_only ?? []).filter((row) => Date.parse(row.closes_at) > asOf);
+  return { fixture, stale, games, opportunities, cancellationOnly };
 }
 
 export function filterGames(games, query, sport) {

@@ -11,10 +11,12 @@ from urllib.parse import urlencode
 if __package__:
     from .api import ScanError, normalize_markets, utc_timestamp
     from .pricing import OUTPUT_FIELDS, price_pairs
+    from .settlement_verification import assessment_report
     from .searcher import filter_kalshi_events, filter_polymarket_events, refresh_reviewed_pairs, review_candidates, review_leads, verified_pairs
 else:
     from api import ScanError, normalize_markets, utc_timestamp
     from pricing import OUTPUT_FIELDS, price_pairs
+    from settlement_verification import assessment_report
     from searcher import filter_kalshi_events, filter_polymarket_events, refresh_reviewed_pairs, review_candidates, review_leads, verified_pairs
 
 
@@ -63,7 +65,7 @@ def scan(args):
         reviews = fixture["reviewed_pairs"]
     else:
         now = datetime.now(timezone.utc)
-        if args.review_candidates or args.review_leads:
+        if args.review_candidates or args.review_leads or args.settlement_assessment:
             window = timedelta(hours=args.hours)
             kalshi, poly = filter_kalshi_events(now, window), filter_polymarket_events(now, window)
         reviews = []
@@ -82,15 +84,21 @@ def scan(args):
             pairs = refresh_reviewed_pairs(reviews, now)
             result = price_pairs(pairs, lambda: datetime.now(timezone.utc))
 
+    candidates = review_candidates(kalshi, poly) if args.review_candidates or args.settlement_assessment else []
+    leads = review_leads(kalshi, poly) if args.review_leads or args.settlement_assessment else []
     if args.review_candidates:
-        candidates = review_candidates(kalshi, poly)
         atomic_write(args.review_candidates, lambda output: json.dump(candidates, output, indent=2))
         print(f"Wrote {len(candidates)} review candidates to {args.review_candidates}")
     if args.review_leads:
-        leads = review_leads(kalshi, poly)
         report = {"status": "unverified", "generated_at": now.isoformat(), "leads": leads}
         atomic_write(args.review_leads, lambda output: json.dump(report, output, indent=2))
         print(f"Wrote {len(leads)} unverified review leads to {args.review_leads}")
+    if args.settlement_assessment:
+        assessment = assessment_report(kalshi, poly, candidates, leads)
+        atomic_write(args.settlement_assessment, lambda output: json.dump(assessment, output, indent=2))
+        print(f"Settlement assessment: {len(assessment['verified'])} verified, "
+              f"{len(assessment['cancellation_only'])} cancellation-only, "
+              f"{len(assessment['manual_review'])} need manual review")
     if publish:
         write_snapshot(args.output, result)
         source = "fixture" if args.fixture else "live"
@@ -103,6 +111,7 @@ def main(argv=None):
     parser.add_argument("--reviewed-pairs", type=Path, help="JSON array of reviewed contract pairs.")
     parser.add_argument("--review-candidates", type=Path, help="Write pairs with matching published settlement terms for review.")
     parser.add_argument("--review-leads", type=Path, help="Write unverified same-event leads for manual settlement review.")
+    parser.add_argument("--settlement-assessment", type=Path, help="Check full rulebooks and write an assessment.")
     parser.add_argument("--hours", type=int, default=24, help="Hours ahead to search for candidates (default: 24).")
     parser.add_argument("--output", type=Path,
                         help="CSV destination (default: opportunities.csv or opportunities.example.csv with --fixture).")
@@ -110,12 +119,14 @@ def main(argv=None):
     if args.output is None:
         args.output = Path("opportunities.example.csv" if args.fixture else "opportunities.csv")
 
-    if not (args.fixture or args.reviewed_pairs or args.review_candidates or args.review_leads):
-        parser.error("provide --reviewed-pairs, --review-candidates, --review-leads, or --fixture")
+    if not (args.fixture or args.reviewed_pairs or args.review_candidates or args.review_leads or args.settlement_assessment):
+        parser.error("provide --reviewed-pairs, --review-candidates, --review-leads, --settlement-assessment, or --fixture")
     if not 1 <= args.hours <= 720:
         parser.error("--hours must be between 1 and 720")
+    if args.fixture and args.settlement_assessment:
+        parser.error("--settlement-assessment requires live market rules")
     inputs = {path.resolve() for path in (args.fixture, args.reviewed_pairs) if path}
-    outputs = [path.resolve() for path in (args.output, args.review_candidates, args.review_leads) if path]
+    outputs = [path.resolve() for path in (args.output, args.review_candidates, args.review_leads, args.settlement_assessment) if path]
     if inputs.intersection(outputs) or len(outputs) != len(set(outputs)):
         parser.error("input and output paths must be distinct")
 

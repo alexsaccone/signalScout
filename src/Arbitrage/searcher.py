@@ -171,18 +171,18 @@ def settlement_key(market):
     return normalize_condition(condition), remaining, declared_sources
 
 
-def review_candidates(kalshi, polymarket):
+def review_candidates(kalshi, polymarket, key=settlement_key):
     by_settlement = defaultdict(list)
     for market in sorted(polymarket, key=lambda market: market["id"]):
-        key = settlement_key(market)
-        if key is not None and len(by_settlement[key]) < MAX_SUGGESTIONS:
-            by_settlement[key].append(market)
+        terms = key(market)
+        if terms is not None and len(by_settlement[terms]) < MAX_SUGGESTIONS:
+            by_settlement[terms].append(market)
 
     candidates = []
     for left in kalshi:
         candidates.extend(
             {"kalshi": market_terms(left), "polymarket": market_terms(right)}
-            for right in by_settlement.get(settlement_key(left), ())
+            for right in by_settlement.get(key(left), ())
         )
     return candidates
 

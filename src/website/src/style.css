@@ -66,6 +66,8 @@ time { font-variant-numeric: tabular-nums; }
 .odds-rail::before { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--share); background: #2c5ea8; }
 .more { margin-top: 16px; }
 .opportunities { border-left: 1px solid var(--line); padding-left: 26px; min-height: 250px; }
+.opportunities section + section { margin-top: 28px; padding-top: 23px; border-top: 1px solid var(--line); }
+.quote-stats.cancellation-payouts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; }
 .message { padding: 17px; margin-top: 16px; border: 1px solid var(--line); border-radius: 6px; background: #eaf0f9; color: #3d5270; font-size: .92rem; line-height: 1.55; }
 .message-title { font-weight: 650; color: var(--ink); margin-bottom: 4px; }
 .message button { margin-top: 8px; }

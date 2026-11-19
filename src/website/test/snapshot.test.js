@@ -59,3 +59,11 @@ test("refresh rejects missing and malformed snapshots", async () => {
   await assert.rejects(loadSnapshot(signal, now, async () => ({ ok: false })), /unavailable/);
   await assert.rejects(loadSnapshot(signal, now, async () => ({ ok: true, json: async () => ({}) })), /Invalid/);
 });
+
+test("shows cancellation differences separately while both contracts are open", () => {
+  const row = { closes_at: "2026-11-19T00:01:00Z" };
+  const withCancellation = validateSnapshot({ ...snapshot, cancellation_only: [row] });
+  assert.deepEqual(dashboardState(withCancellation, now).cancellationOnly, [row]);
+  assert.deepEqual(dashboardState(withCancellation, now + 60000).cancellationOnly, []);
+  assert.deepEqual(dashboardState(snapshot, now).cancellationOnly, []);
+});
