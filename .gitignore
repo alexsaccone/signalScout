@@ -2,3 +2,4 @@
 .venv/
 __pycache__/
 opportunities.csv
+output_final3.csv
