@@ -12,7 +12,7 @@ def filter_kalshi_events(now):
 
 
 def filter_polymarket_events(now):
-    return more_poly(50, now)
+    return more_poly(1000, now)
 
 
 def market_terms(market):

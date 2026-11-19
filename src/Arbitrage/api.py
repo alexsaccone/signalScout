@@ -28,10 +28,11 @@ def binary_values(value):
     return values
 
 
-def fetch_json(url, params=None):
+def fetch_json(url, params=None, get=None):
+    get = get or requests.get
     for attempt in range(3):
         try:
-            response = requests.get(url, params=params, timeout=(5, 15))
+            response = get(url, params=params, timeout=(5, 15))
         except (requests.Timeout, requests.ConnectionError) as error:
             if attempt == 2:
                 raise ScanError(f"{url}: connection failed after three attempts") from error
@@ -138,21 +139,22 @@ def normalize_markets(rows, venue, now):
 
 def market_rows(url, params, response_cursor, request_cursor, pages):
     seen = set()
-    for _ in range(pages):
-        payload, _ = fetch_json(url, params)
-        if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
-            raise ScanError(f"{url}: invalid market page")
-        if response_cursor == "cursor" and response_cursor not in payload:
-            raise ScanError(f"{url}: missing pagination cursor")
-        rows = payload["markets"]
-        cursor = payload.get(response_cursor, "")
-        if not isinstance(cursor, str) or cursor in seen or (cursor and not rows):
-            raise ScanError(f"{url}: invalid or repeated pagination cursor")
-        yield from rows
-        if not cursor:
-            return
-        seen.add(cursor)
-        params = {**params, request_cursor: cursor}
+    with requests.Session() as session:
+        for _ in range(pages):
+            payload, _ = fetch_json(url, params, get=session.get)
+            if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
+                raise ScanError(f"{url}: invalid market page")
+            if response_cursor == "cursor" and response_cursor not in payload:
+                raise ScanError(f"{url}: missing pagination cursor")
+            rows = payload["markets"]
+            cursor = payload.get(response_cursor, "")
+            if not isinstance(cursor, str) or cursor in seen or (cursor and not rows):
+                raise ScanError(f"{url}: invalid or repeated pagination cursor")
+            yield from rows
+            if not cursor:
+                return
+            seen.add(cursor)
+            params = {**params, request_cursor: cursor}
     raise ScanError(f"{url}: page limit reached before the end of the feed")
 
 
@@ -168,7 +170,7 @@ def more_kalshi(pages, now):
 
 def more_poly(pages, now):
     params = {
-        "limit": 200, "closed": "false",
+        "limit": 100, "closed": "false",
         "end_date_min": now.isoformat(),
         "end_date_max": (now + SCAN_WINDOW).isoformat(),
     }
