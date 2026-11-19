@@ -1,8 +1,30 @@
 TODO:
 
-- Create React website visualization for SignalScout
-  - Arbitrage opportunities (~updated every 2 hours)
-  - Odds of upcoming games
+- Establish and evaluate a pregame sports prediction baseline.
+
+## Market dashboard
+
+The [SignalScout dashboard](https://alexsaccone.github.io/signalScout/) shows
+upcoming Polymarket moneyline odds and estimates for reviewed contract pairs.
+The GitHub Actions workflow refreshes the snapshot roughly every two hours.
+A failed run leaves the previous snapshot online, with its original update
+time. Polymarket odds cover games starting within three days.
+
+Add confirmed reviews to `data/reviewed_pairs.json` to include them in the
+scheduled scan. An empty review list still publishes upcoming game odds.
+
+To preview the dashboard offline, generate its labeled fixture snapshot from
+the repository root with the Python environment below.
+
+```powershell
+.\.venv\Scripts\python.exe -m src.Arbitrage.dashboard --fixture tests/fixtures/scan.json
+cd src/website
+npm ci
+npm run dev
+```
+
+Use Node.js 22. On macOS and Linux, run the first command with `python` from
+the activated environment.
 
 ## Running the market scanner
 

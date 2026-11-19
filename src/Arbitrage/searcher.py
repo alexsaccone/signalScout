@@ -4,9 +4,9 @@ from heapq import nsmallest
 import re
 
 if __package__:
-    from .api import more_kalshi, more_poly, SCAN_WINDOW
+    from .api import lookup_markets, more_kalshi, more_poly, ScanError, SCAN_WINDOW
 else:
-    from api import more_kalshi, more_poly, SCAN_WINDOW
+    from api import lookup_markets, more_kalshi, more_poly, ScanError, SCAN_WINDOW
 
 
 def filter_kalshi_events(now, window=SCAN_WINDOW):
@@ -104,3 +104,13 @@ def verified_pairs(kalshi, polymarket, reviewed):
         if ids not in seen:
             seen.add(ids)
             yield left, right
+
+
+def refresh_reviewed_pairs(reviews, now):
+    markets = []
+    for venue in ("kalshi", "polymarket"):
+        ids = {review[venue]["id"] for review in reviews}
+        if any(not isinstance(market_id, str) or not market_id.strip() for market_id in ids):
+            raise ScanError(f"Invalid reviewed {venue} market ID")
+        markets.append(lookup_markets(ids, venue, now))
+    return verified_pairs(*markets, reviews)

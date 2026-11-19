@@ -9,13 +9,13 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import urlencode
 
 if __package__:
-    from .api import ScanError, lookup_markets, normalize_markets, utc_timestamp
+    from .api import ScanError, normalize_markets, utc_timestamp
     from .pricing import OUTPUT_FIELDS, price_pairs
-    from .searcher import filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
+    from .searcher import filter_kalshi_events, filter_polymarket_events, refresh_reviewed_pairs, review_candidates, verified_pairs
 else:
-    from api import ScanError, lookup_markets, normalize_markets, utc_timestamp
+    from api import ScanError, normalize_markets, utc_timestamp
     from pricing import OUTPUT_FIELDS, price_pairs
-    from searcher import filter_kalshi_events, filter_polymarket_events, review_candidates, verified_pairs
+    from searcher import filter_kalshi_events, filter_polymarket_events, refresh_reviewed_pairs, review_candidates, verified_pairs
 
 
 def fixture_quotes(responses):
@@ -79,13 +79,7 @@ def scan(args):
             pairs = verified_pairs(kalshi, poly, reviews)
             result = price_pairs(pairs, lambda: now, fixture_quotes(fixture["quotes"]))
         else:
-            reviewed_markets = []
-            for venue in ("kalshi", "polymarket"):
-                ids = {review[venue]["id"] for review in reviews}
-                if any(not isinstance(market_id, str) or not market_id.strip() for market_id in ids):
-                    raise ScanError(f"Invalid reviewed {venue} market ID")
-                reviewed_markets.append(lookup_markets(ids, venue, now))
-            pairs = verified_pairs(*reviewed_markets, reviews)
+            pairs = refresh_reviewed_pairs(reviews, now)
             result = price_pairs(pairs, lambda: datetime.now(timezone.utc))
 
     if args.review_candidates:
