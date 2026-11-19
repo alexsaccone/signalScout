@@ -1,7 +1,6 @@
-from datetime import date, datetime, timezone
-
-import numpy as np
-import pandas as pd
+from collections import defaultdict
+from datetime import datetime, timezone
+import re
 
 if __package__:
     from .api import more_kalshi, more_poly
@@ -11,102 +10,82 @@ else:
     from formulas import arbitrage_pct, get_stakes, has_arbitrage, pct_return_per_day, profit_pct
 
 
-def filter_kalshi_events(now=None):
-    return more_kalshi(1000, now or datetime.now(timezone.utc))
+def filter_kalshi_events(now):
+    return more_kalshi(1000, now)
 
 
-def filter_polymarket_events(now=None):
-    return more_poly(50, now or datetime.now(timezone.utc))
+def filter_polymarket_events(now):
+    return more_poly(50, now)
 
 
-def sentiment_analysis(kalshi, polymarket, topn=5):
-    from sentence_transformers import SentenceTransformer
+def market_terms(market):
+    terms = {key: market[key] for key in ("id", "title", "subtitle", "rules", "secondary_rules", "resolution")}
+    terms["close_time"] = market["close_time"].isoformat()
+    if "tokens" in market:
+        terms["tokens"] = market["tokens"]
+    return terms
 
-    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu", trust_remote_code=False)
-    k_emb, p_emb = (
-        model.encode(
-            [f"{market['title']} {market['subtitle']}\n{market['rules']}\n{market['close_time']}" for market in markets],
-            convert_to_tensor=True, normalize_embeddings=True, batch_size=256,
-        )
-        for markets in (kalshi, polymarket)
-    )
-    sims = (k_emb @ p_emb.T).cpu().numpy()
-    topj = np.argpartition(-sims, topn, axis=1)[:, :topn]
-    rows = []
-    for i, market_k in enumerate(kalshi):
-        for j in topj[i]:
-            market_p = polymarket[j]
-            rows.append({
-                "kalshi": market_k["title"],
-                "polymarket": market_p["title"],
-                "similarity": sims[i, j],
-                "oddsK_yes": market_k["yes_ask"] * 100,
-                "oddsK_no": market_k["no_ask"] * 100,
-                "oddsP_yes": market_p["yes_ask"],
-                "oddsP_no": market_p["no_ask"],
-                "rulesK": market_k["rules"],
-                "kalshi_close": market_k["close_time"],
-                "polymarket_close": market_p["close_time"],
+
+def title_words(market):
+    return tuple(re.findall(r"\w+", market["title"].casefold()))
+
+
+def review_candidates(kalshi, polymarket):
+    by_title = defaultdict(list)
+    for market in polymarket:
+        by_title[title_words(market)].append(market)
+    return [
+        {"kalshi": market_terms(left), "polymarket": market_terms(right)}
+        for left in kalshi
+        for right in by_title.get(title_words(left), ())
+        if left["rules"].strip() and right["rules"].strip()
+    ]
+
+
+def verified_pairs(kalshi, polymarket, reviewed):
+    by_kalshi_id = {market["id"]: market for market in kalshi}
+    by_poly_id = {market["id"]: market for market in polymarket}
+    seen = set()
+    for review in reviewed:
+        left = by_kalshi_id.get(review["kalshi"]["id"])
+        right = by_poly_id.get(review["polymarket"]["id"])
+        if not left or not right or not left["rules"].strip() or not right["rules"].strip():
+            continue
+        if review != {"kalshi": market_terms(left), "polymarket": market_terms(right)}:
+            continue
+        # A review binds both displayed rules and the exact outcome tokens.
+        ids = left["id"], right["id"]
+        if ids not in seen:
+            seen.add(ids)
+            yield left, right
+
+
+OUTPUT_FIELDS = (
+    "kalshi_id", "polymarket_id", "kalshi_name", "polymarket_name", "kalshi_side", "polymarket_side",
+    "arbitrage_pct", "profit_pct", "kalshi_stake", "polymarket_stake", "daily_pct_return",
+)
+
+
+def arbitrage_analysis(pairs, now):
+    opportunities = []
+    for kalshi, poly in pairs:
+        for k_side, p_side in (("yes", "no"), ("no", "yes")):
+            k_price = kalshi[f"{k_side}_ask"]
+            p_price = poly[f"{p_side}_ask"]
+            if not all(price.is_finite() and 0 < price < 1 for price in (k_price, p_price)):
+                continue
+            odds = 1 / float(k_price), 1 / float(p_price)
+            cost = arbitrage_pct(*odds)
+            if not has_arbitrage(cost):
+                continue
+            kalshi_stake, poly_stake = get_stakes(*odds)
+            days = (max(kalshi["close_time"], poly["close_time"]).date() - now.date()).days
+            opportunities.append({
+                "kalshi_id": kalshi["id"], "polymarket_id": poly["id"],
+                "kalshi_name": kalshi["title"], "polymarket_name": poly["title"],
+                "kalshi_side": k_side, "polymarket_side": p_side,
+                "arbitrage_pct": cost, "profit_pct": profit_pct(cost),
+                "kalshi_stake": kalshi_stake, "polymarket_stake": poly_stake,
+                "daily_pct_return": pct_return_per_day(cost, days),
             })
-    return pd.DataFrame(rows).sort_values("similarity", ascending=False)
-
-
-
-def arbitrage_analysis(df):
-    try:
-        df['kalshi_close'] = pd.to_datetime(df["kalshi_close"], utc=True, errors="coerce")
-        df['polymarket_close'] = pd.to_datetime(df['polymarket_close'], utc = True, errors = "coerce")
-    except Exception as e:
-        print(f"Error converting date columns: {e}")
-        # It's helpful to see the data that's causing the error
-        print("Problematic 'kalshi_close' data:")
-        print(df['kalshi_close'].head())
-        return pd.DataFrame()
-
-    today = date.today()
-    filtered_df = df[df["similarity"] > 0.75].copy()
-    arbitrage_events = []
-    for index, row in filtered_df.iterrows():
-        oddsK_yes = 100 / float(row["oddsK_yes"]) if float(row["oddsK_yes"]) != 0 else 1
-        oddsP_yes = 1 / float(row["oddsP_yes"]) if float(row["oddsP_yes"]) != 0 else 1
-        oddsK_no = 100 / float(row["oddsK_no"]) if float(row["oddsK_no"]) != 0 else 1
-        oddsP_no = 1 / float(row["oddsP_no"]) if float(row["oddsP_no"]) != 0 else 1
-
-        a_pct1 = arbitrage_pct(oddsK_yes, oddsP_no)
-        a_pct2 = arbitrage_pct(oddsK_no, oddsP_yes)
-        best_a_pct = min(a_pct1, a_pct2)
-        first_better = a_pct1 < a_pct2
-        if has_arbitrage(best_a_pct):
-            if first_better: # if betting yes on Kalshi
-                stakes = get_stakes(oddsK_yes, oddsP_no)
-            else:
-                stakes = get_stakes(oddsK_no, oddsP_yes)
-            days = ((max(row["kalshi_close"], row["polymarket_close"])).date() - today).days
-            arbitrage_events.append({
-                "kalshi_name": row["kalshi"],
-                "polymarket_name": row["polymarket"],
-                "arbitrage_pct": best_a_pct,
-                "profit_pct": profit_pct(best_a_pct),
-                "kalshi_stake": stakes[0],
-                "polymarket_stake": stakes[1],
-                "daily_pct_return": pct_return_per_day(best_a_pct, days),
-                "rulesK": row["rulesK"]
-            })
-
-
-    if not arbitrage_events:
-        return pd.DataFrame()
-
-    ranked_odds_df = pd.DataFrame(arbitrage_events).sort_values("daily_pct_return", ascending=False)
-    return ranked_odds_df
-
-def true_match_checker(df):
-        filtered = df[df["similarity"] > 0.75]
-        verified = []
-        for idx, row in filtered.iterrows():
-            prompt = f"Are these two markets about the same event?\nKalshi: {row['kalshi']}\nPolymarket: {row['polymarket']}\nAnswer Yes or No."
-            # resp = model.generate(prompt) 
-            is_same = "yes" in resp.lower()
-            if is_same:
-                verified.append({**row,"verified": True,"expected_profit": "placeholder"})
-        return pd.DataFrame(verified)
+    return sorted(opportunities, key=lambda opportunity: opportunity["daily_pct_return"], reverse=True)

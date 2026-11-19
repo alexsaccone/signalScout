@@ -14,4 +14,9 @@ python -m unittest discover -s tests -v
 python -m src.Arbitrage.ai_filter --fixture tests/fixtures/scan.json --output opportunities.csv
 ```
 
-For a live run, install `requirements-live.txt` and omit `--fixture`. The first live run downloads the text matching model.
+Omit `--fixture` to scan public markets closing in the next 30 days. Use
+`--review-candidates candidates.json` to export similarly titled contracts for review.
+Copy pairs with equivalent outcomes and settlement rules into a JSON array, then
+pass it as `--reviewed-pairs reviewed.json`. Pairs whose listed terms or outcome
+tokens change require a fresh review. The fixture shows the file format under
+`reviewed_pairs`.
