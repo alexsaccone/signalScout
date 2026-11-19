@@ -49,7 +49,7 @@ def review_candidates(kalshi, polymarket):
         if len(exact) < MAX_SUGGESTIONS:
             exact.append(index)
         for word in words:
-            posting = by_word[day, word]
+            posting = by_word[word]
             if len(posting) <= max_postings:
                 posting.append(index)
 
@@ -59,17 +59,13 @@ def review_candidates(kalshi, polymarket):
         exact = sorted(index for nearby in days for index in by_title.get((nearby, words), ()))
         if len(exact) >= MAX_SUGGESTIONS:
             return exact[:MAX_SUGGESTIONS]
-        hits = Counter()
-        for nearby in days:
-            for word in words:
-                posting = by_word.get((nearby, word), ())
-                if len(posting) <= max_postings:
-                    hits.update(posting)
+        hits = Counter(index for word in words if len(by_word.get(word, ())) <= max_postings
+                       for index in by_word.get(word, ()))
 
         def fuzzy_scores():
             for index, overlap in hits.items():
-                right_words = markets[index][1]
-                if overlap >= 2 and right_words != words:
+                right, right_words = markets[index]
+                if overlap >= 2 and right_words != words and right["close_time"].date().toordinal() in days:
                     score = len(words & right_words) / len(words | right_words)
                     if score >= 0.5:
                         yield -score, index
