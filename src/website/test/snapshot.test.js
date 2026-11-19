@@ -67,3 +67,11 @@ test("shows cancellation differences separately while both contracts are open", 
   assert.deepEqual(dashboardState(withCancellation, now + 60000).cancellationOnly, []);
   assert.deepEqual(dashboardState(snapshot, now).cancellationOnly, []);
 });
+
+test("matched pairs appear without quotes and expire at their trading cutoff", () => {
+  const row = { kalshi_id: "K-1", polymarket_id: "P-1", closes_at: "2026-11-19T00:01:00Z" };
+  const withMatches = validateSnapshot({ ...snapshot, opportunities: [], matched_pairs: [row] });
+  assert.deepEqual(dashboardState(withMatches, now).matchedPairs, [row]);
+  assert.deepEqual(dashboardState(withMatches, now + 60000).matchedPairs, []);
+  assert.deepEqual(dashboardState(snapshot, now).matchedPairs, []);
+});

@@ -4,6 +4,8 @@
 
 The [SignalScout dashboard](https://alexsaccone.github.io/signalScout/) shows
 upcoming Polymarket moneyline odds and estimates for reviewed contract pairs.
+**Matched pairs** lists all open verified pairs, including pairs without a
+profitable quote.
 The GitHub Actions workflow refreshes the snapshot roughly every two hours.
 Select **Refresh data** to check for the latest published snapshot. The dashboard
 shows when it finished checking and keeps the last loaded data if a check fails.
@@ -19,7 +21,10 @@ matching complete text under supported normalizations or an identical
 document. The scanner can also prove specific mismatches between published
 Polymarket rules and reviewed versions of Kalshi rulebooks. Incomplete,
 unfamiliar, or inconclusive evidence goes to manual review. Resolution checks
-run in Python against public venue APIs. The
+run in Python against public venue APIs. A rule that explicitly includes the
+full 11:59 p.m. minute can match a rule that ends immediately before midnight
+the next day in the same time zone. Ambiguous cutoff wording goes to review
+when paired. The
 [AI review note](docs/settlement-ai-review.md) describes an optional human-review
 pilot for the uncertain cases.
 

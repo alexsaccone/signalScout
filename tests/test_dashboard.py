@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
-from src.Arbitrage.dashboard import main, upcoming_odds
+from src.Arbitrage.dashboard import build_snapshot, main, upcoming_odds
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
 GAME = {
@@ -40,3 +40,11 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(len(snapshot["odds"]), 3)
         opportunity, = snapshot["opportunities"]
         self.assertEqual(opportunity["estimated_net_profit"], "0.73000")
+
+    def test_snapshot_lists_matched_pairs_when_pricing_finds_no_opportunity(self):
+        fixture = Path(__file__).parent / "fixtures" / "scan.json"
+        with mock.patch("src.Arbitrage.dashboard.price_pairs", return_value=[]):
+            snapshot = build_snapshot(None, fixture)
+        self.assertEqual(snapshot["opportunities"], [])
+        pair, = snapshot["matched_pairs"]
+        self.assertEqual((pair["kalshi_id"], pair["polymarket_id"]), ("K-EXAMPLE", "P-EXAMPLE"))

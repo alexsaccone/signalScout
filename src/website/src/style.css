@@ -29,7 +29,7 @@ button, input, select { font: inherit; }
 .mark i { width: 5px; border-radius: 1px; background: #91c3fd; height: 42%; }
 .mark i:nth-child(2) { height: 67%; }
 .mark i:nth-child(3) { height: 100%; }
-nav { display: flex; flex-wrap: wrap; gap: 22px; font-size: .9rem; }
+nav { display: flex; flex-wrap: wrap; gap: 7px 18px; font-size: .9rem; }
 nav a { text-decoration-color: transparent; }
 nav a:hover { text-decoration-color: #c1d9fa; }
 .masthead-main { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 37px 0 39px; }
@@ -67,6 +67,9 @@ time { font-variant-numeric: tabular-nums; }
 .more { margin-top: 16px; }
 .opportunities { border-left: 1px solid var(--line); padding-left: 26px; min-height: 250px; }
 .opportunities section + section { margin-top: 28px; padding-top: 23px; border-top: 1px solid var(--line); }
+.pair-venues { display: grid; gap: 8px; margin: 0 0 9px; }
+.pair-venues dt { font-size: .8rem; color: var(--muted); }
+.pair-venues dd { font-weight: 630; overflow-wrap: anywhere; }
 .quote-stats.cancellation-payouts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; }
 .message { padding: 17px; margin-top: 16px; border: 1px solid var(--line); border-radius: 6px; background: #eaf0f9; color: #3d5270; font-size: .92rem; line-height: 1.55; }
 .message-title { font-weight: 650; color: var(--ink); margin-bottom: 4px; }

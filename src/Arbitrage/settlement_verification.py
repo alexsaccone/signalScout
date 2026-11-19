@@ -6,16 +6,14 @@ import requests
 
 if __package__:
     from .api import KALSHI_URL, ScanError, fetch_json
-    from .searcher import QUOTED, review_candidates, settlement_key
+    from .searcher import CONTRACT_REFERENCE, review_candidates, rule_matches, settlement_key
     from .settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
 else:
     from api import KALSHI_URL, ScanError, fetch_json
-    from searcher import QUOTED, review_candidates, settlement_key
+    from searcher import CONTRACT_REFERENCE, review_candidates, rule_matches, settlement_key
     from settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
 
 
-# Only an explicit incorporation clause makes a linked document governing.
-CONTRACT_REFERENCE = re.compile(r"^Governing contract terms: (https://[^\s]+?\.pdf)\.?[ \t]*\r?$", re.M)
 CANCELLATION = re.compile(
     r'^(?P<trigger>If the (?:game|match|fight|event) is cancell?ed,) '
     r'(?:settle at |(?:the|this) market (?:will resolve|resolves)(?: to)? )'
@@ -54,12 +52,6 @@ def rulebook_url(series):
     doc, _ = fetch_json(f"{KALSHI_URL}/series/{series}")
     url = doc["series"].get("contract_terms_url")
     return url if isinstance(url, str) and re.fullmatch(KALSHI_BOOK, url) else None
-
-
-def rule_matches(pattern, text):
-    quoted = list(QUOTED.finditer(text))
-    return {match.start(): match for match in pattern.finditer(text)
-            if not any(span.start() < match.start() < span.end() for span in quoted)}
 
 
 def cancellation_mismatch(left, right, book):
@@ -201,6 +193,8 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
                 continue
             reason = "The cancellation payouts could not be compared without interpreting venue-specific fair-price rules."
         row["reason"] = reason
+        if "reason" in candidate:
+            row["lead_reason"] = candidate["reason"]
         report["manual_review"].append(row)
     return report
 

@@ -1,5 +1,5 @@
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, timedelta
 from heapq import nsmallest
 import re
 
@@ -51,7 +51,37 @@ SPORTS_SESSION = re.compile(r"\b(?:\d{1,2}(?::\d{2})? [ap]m [A-Z]{2,4}|(?:game|l
 UNNAMED = re.compile(r"\b(?:listed|selected|specified) (?:player|team)\b|\bthe (?:home team|away team|player)\b", re.I)
 SOURCE_URL = re.compile(r'https?://[^\s<>()"]+')
 
+# Only an explicit incorporation clause makes a linked document governing.
+CONTRACT_REFERENCE = re.compile(r"^Governing contract terms: (https://[^\s]+?\.pdf)\.?[ \t]*\r?$", re.M)
+
 CLOCK = re.compile(r"\bat (0?[1-9]|1[0-2])(?::([0-5]\d))? ([ap])\.?m\.? (ET|CT|MT|PT|UTC)\b", re.I)
+CUTOFF_TIME = re.compile(r"11:59|12(?::00)? a\.?m|00:00|midnight", re.I)
+CUTOFF_ZONE = r"(?P<zone>ET|CT|MT|PT|UTC)"
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+CUTOFF_DAY = rf"(?:(?P<weekday>{'|'.join(WEEKDAYS)}), )?(?P<day>{DATED})"
+LAST_MINUTE = rf"11:59 p\.?m\.? {CUTOFF_ZONE}"
+MIDNIGHT_CLOCK = rf"(?:12(?::00)? a\.?m\.?|00:00) {CUTOFF_ZONE}"
+ENTIRE_MINUTE = r", including the entire (?:final|11:59 p\.?m\.?) minute\b"
+FULL_MINUTE_CUTOFFS = (
+    re.compile(rf"\bthrough the end of the {LAST_MINUTE} minute on {CUTOFF_DAY}", re.I),
+    re.compile(rf"\bthrough {CUTOFF_DAY}(?: at |, ){LAST_MINUTE}{ENTIRE_MINUTE}", re.I),
+    re.compile(rf"\bthrough {LAST_MINUTE} on {CUTOFF_DAY}{ENTIRE_MINUTE}", re.I),
+)
+NEXT_MIDNIGHT_CUTOFFS = (
+    re.compile(rf"\bbefore {CUTOFF_DAY} at {MIDNIGHT_CLOCK}\b", re.I),
+    re.compile(rf"\bbefore {MIDNIGHT_CLOCK} on {CUTOFF_DAY}", re.I),
+    re.compile(rf"\bbefore midnight {CUTOFF_ZONE} at the start of {CUTOFF_DAY}", re.I),
+    re.compile(rf"\bbefore midnight at the start of {CUTOFF_DAY} (?P<paren>\()?{CUTOFF_ZONE}\b(?(paren)\))", re.I),
+)
+AMBIGUOUS_FINAL_MINUTE = (
+    re.compile(rf"\b(?:by|through|until) {CUTOFF_DAY}(?: at |, ){LAST_MINUTE}\b", re.I),
+    re.compile(rf"\b(?:by|through|until) {LAST_MINUTE} on {CUTOFF_DAY}", re.I),
+)
+AMBIGUOUS_MIDNIGHT = (
+    re.compile(rf"\b(?:by|through|until) {CUTOFF_DAY}(?: at |, ){MIDNIGHT_CLOCK}\b", re.I),
+    re.compile(rf"\b(?:by|before|through|until) midnight {CUTOFF_ZONE} on {CUTOFF_DAY}", re.I),
+    re.compile(rf"\b(?:by|through|until) {MIDNIGHT_CLOCK} on {CUTOFF_DAY}", re.I),
+)
 QUOTED = re.compile(r'("[^"]*"|“[^”]*”)')
 STAT_THRESHOLD = re.compile(
     r'^([^"“”]+?) (?:scores|records) '
@@ -71,7 +101,7 @@ SETTLEMENT_CLAUSE = re.compile(
     rf'|The resolution source for this market (?:is|will be) (?P<is_source>{SOURCE_URL.pattern})\.'
     r'|If the (?P<event>game|match|fight) is cancell?ed, '
     r'(?:settle at |(?:the|this) market (?:resolves|will resolve)(?: to)? )'
-    r'(?:"50-50\."|"50-50"\.|50-50\.)'
+    r'(?P<cancel_quote>")?(?P<cancel_payout>50-50|Yes|No)(?(cancel_quote)(?:"\.|\.")|\.)'
     r'|(?P<default>Otherwise, (?:the|this) market (?:resolves|will resolve) to (?:"No\."|"No"\.|No\.))'
     r')(?= |$)'
 )
@@ -82,14 +112,41 @@ def iso_date(match):
     return date(int(year), MONTH_NUMBER[month.lower()], int(day)).isoformat()
 
 
-def normalize_rule_text(text):
+def normalize_cutoffs(text, review_cutoffs):
+    if not CUTOFF_TIME.search(text):
+        return text
+
+    def boundary(match, shift):
+        try:
+            stated_day = date.fromisoformat(match["day"])
+            if match["weekday"] and WEEKDAYS[stated_day.weekday()] != match["weekday"].casefold():
+                return match[0]
+            day = stated_day + timedelta(days=shift)
+        except (OverflowError, ValueError):
+            return match[0]
+        return f'before {day.isoformat()} at 12:00 AM {match["zone"].upper()}'
+
+    for pattern in FULL_MINUTE_CUTOFFS:
+        text = pattern.sub(lambda match: boundary(match, 1), text)
+    for pattern in NEXT_MIDNIGHT_CUTOFFS:
+        text = pattern.sub(lambda match: boundary(match, 0), text)
+    if review_cutoffs:
+        for pattern in AMBIGUOUS_FINAL_MINUTE:
+            text = pattern.sub(lambda match: boundary(match, 1), text)
+        for pattern in AMBIGUOUS_MIDNIGHT:
+            text = pattern.sub(lambda match: boundary(match, 0), text)
+    return text
+
+
+def normalize_rule_text(text, *, review_cutoffs=False):
     parts = QUOTED.split(text)
     for index in range(0, len(parts), 2):
         part = re.sub(r"\s+", " ", parts[index])
         part = EVENT_DATE.sub(iso_date, part)
-        parts[index] = CLOCK.sub(
+        part = CLOCK.sub(
             lambda m: f"at {int(m[1])}:{m[2] or '00'} {m[3].upper()}M {m[4].upper()}", part,
         )
+        parts[index] = normalize_cutoffs(part, review_cutoffs)
     return "".join(parts).strip()
 
 
@@ -113,7 +170,7 @@ def normalize_settlement_terms(remaining):
         if match["literal"]:
             return match[0]
         if match["event"]:
-            return f'If the {match["event"]} is canceled, settle at 50-50.'
+            return f'If the {match["event"]} is canceled, settle at {match["cancel_payout"]}.'
         if match["default"]:
             return "Otherwise, this market will resolve to No."
         sources.add(match["use_source"] or match["is_source"])
@@ -229,6 +286,27 @@ def lead_terms(market):
         return dates.pop(), words
 
 
+def rule_matches(pattern, text):
+    quoted = list(QUOTED.finditer(text))
+    return {match.start(): match for match in pattern.finditer(text)
+            if not any(span.start() < match.start() < span.end() for span in quoted)}
+
+
+def cutoff_review_key(market):
+    if not CUTOFF_TIME.search(market["rules"] + " " + market["secondary_rules"]):
+        return None
+    try:
+        rules = market["rules"]
+        references = rule_matches(CONTRACT_REFERENCE, rules)
+        rules = CONTRACT_REFERENCE.sub(lambda match: "" if match.start() in references else match[0], rules)
+        fields = {"rules": normalize_rule_text(rules, review_cutoffs=True),
+                  "secondary_rules": normalize_rule_text(market["secondary_rules"], review_cutoffs=True)}
+    except ValueError:
+        return None
+    if " at 12:00 AM " in fields["rules"] + " " + fields["secondary_rules"]:
+        return settlement_key(dict(market, **fields))
+
+
 def review_leads(kalshi, polymarket):
     by_word = defaultdict(list)
     poly_terms = []
@@ -265,8 +343,27 @@ def review_leads(kalshi, polymarket):
 
     ranked = nsmallest(MAX_LEADS, (lead for group in by_event.values() for lead in group),
                        key=lambda lead: lead[:3])
-    return [{"event_date": day, "kalshi": market_terms(left), "polymarket": market_terms(right)}
-            for _, _, _, day, left, right in ranked]
+    cutoff_leads = review_candidates(kalshi, polymarket, key=cutoff_review_key)
+    candidates = []
+    for lead in cutoff_leads:
+        left_key = settlement_key(lead["kalshi"])
+        if left_key is None or left_key != settlement_key(lead["polymarket"]):
+            candidates.append({"reason": "Compare the end-of-day cutoff wording", **lead})
+    candidates.extend({"event_date": day, "kalshi": market_terms(left), "polymarket": market_terms(right)}
+                      for _, _, _, day, left, right in ranked)
+    events = {market["id"]: market["event_id"] for market in kalshi}
+    seen_events = Counter()
+    unique = {}
+    for lead in candidates:
+        ids = lead["kalshi"]["id"], lead["polymarket"]["id"]
+        event_id = events[ids[0]]
+        if ids in unique or seen_events[event_id] >= 2:
+            continue
+        unique[ids] = lead
+        seen_events[event_id] += 1
+        if len(unique) == MAX_LEADS:
+            break
+    return list(unique.values())
 
 
 def verified_pairs(kalshi, polymarket, reviewed):

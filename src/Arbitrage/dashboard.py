@@ -87,16 +87,25 @@ def live_pairs(reviews, report, now):
     return priceable, cancellation
 
 
+def matched_pair_rows(pairs):
+    rows = [{
+        "kalshi_id": left["id"], "polymarket_id": right["id"],
+        "kalshi_title": left["title"], "polymarket_title": right["title"],
+        "closes_at": min(left["close_time"], right["close_time"]).isoformat(),
+    } for left, right in pairs]
+    return sorted(rows, key=lambda row: (row["closes_at"], row["kalshi_title"], row["polymarket_id"]))
+
+
 def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
     if fixture_path:
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
         now = utc_timestamp(fixture["as_of"])
         kalshi = normalize_markets(fixture["kalshi"], "kalshi", now)
         polymarket = normalize_markets(fixture["polymarket"], "polymarket", now)
-        pairs = verified_pairs(kalshi, polymarket, fixture["reviewed_pairs"])
+        pairs = list(verified_pairs(kalshi, polymarket, fixture["reviewed_pairs"]))
         opportunities = price_pairs(pairs, lambda: now, fixture_quotes(fixture["quotes"]))
         return {"source": "fixture", "generated_at": now.isoformat(), "odds": upcoming_odds(fixture["odds"], now),
-                "opportunities": opportunities, "cancellation_only": []}
+                "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs), "cancellation_only": []}
 
     now = datetime.now(timezone.utc)
     reviews = json.loads(reviews_path.read_text(encoding="utf-8"))
@@ -107,7 +116,8 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
     pairs, cancellation = live_pairs(reviews, report, now)
     opportunities = price_pairs(pairs, lambda: datetime.now(timezone.utc))
     return {"source": "live", "generated_at": datetime.now(timezone.utc).isoformat(),
-            "odds": games, "opportunities": opportunities, "cancellation_only": cancellation}
+            "odds": games, "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs),
+            "cancellation_only": cancellation}
 
 
 def main(argv=None):
