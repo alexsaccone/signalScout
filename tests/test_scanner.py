@@ -19,4 +19,7 @@ class ScannerTest(unittest.TestCase):
                 row, = csv.DictReader(snapshot)
 
         self.assertEqual(row["kalshi_name"], "Will Example A win?")
-        self.assertAlmostEqual(float(row["profit_pct"]), 1 / 9)
+        self.assertEqual(row["polymarket_token"], "10")
+        self.assertEqual(row["max_contracts"], "10")
+        self.assertEqual(row["estimated_fees"], "0.27000")
+        self.assertEqual(row["estimated_net_profit"], "0.73000")

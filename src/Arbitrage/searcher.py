@@ -1,13 +1,10 @@
 from collections import defaultdict
-from datetime import datetime, timezone
 import re
 
 if __package__:
     from .api import more_kalshi, more_poly
-    from .formulas import arbitrage_pct, get_stakes, has_arbitrage, pct_return_per_day, profit_pct
 else:
     from api import more_kalshi, more_poly
-    from formulas import arbitrage_pct, get_stakes, has_arbitrage, pct_return_per_day, profit_pct
 
 
 def filter_kalshi_events(now):
@@ -58,34 +55,3 @@ def verified_pairs(kalshi, polymarket, reviewed):
         if ids not in seen:
             seen.add(ids)
             yield left, right
-
-
-OUTPUT_FIELDS = (
-    "kalshi_id", "polymarket_id", "kalshi_name", "polymarket_name", "kalshi_side", "polymarket_side",
-    "arbitrage_pct", "profit_pct", "kalshi_stake", "polymarket_stake", "daily_pct_return",
-)
-
-
-def arbitrage_analysis(pairs, now):
-    opportunities = []
-    for kalshi, poly in pairs:
-        for k_side, p_side in (("yes", "no"), ("no", "yes")):
-            k_price = kalshi[f"{k_side}_ask"]
-            p_price = poly[f"{p_side}_ask"]
-            if not all(price.is_finite() and 0 < price < 1 for price in (k_price, p_price)):
-                continue
-            odds = 1 / float(k_price), 1 / float(p_price)
-            cost = arbitrage_pct(*odds)
-            if not has_arbitrage(cost):
-                continue
-            kalshi_stake, poly_stake = get_stakes(*odds)
-            days = (max(kalshi["close_time"], poly["close_time"]).date() - now.date()).days
-            opportunities.append({
-                "kalshi_id": kalshi["id"], "polymarket_id": poly["id"],
-                "kalshi_name": kalshi["title"], "polymarket_name": poly["title"],
-                "kalshi_side": k_side, "polymarket_side": p_side,
-                "arbitrage_pct": cost, "profit_pct": profit_pct(cost),
-                "kalshi_stake": kalshi_stake, "polymarket_stake": poly_stake,
-                "daily_pct_return": pct_return_per_day(cost, days),
-            })
-    return sorted(opportunities, key=lambda opportunity: opportunity["daily_pct_return"], reverse=True)

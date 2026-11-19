@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from decimal import Decimal
 import unittest
 from unittest import mock
 
@@ -28,7 +27,7 @@ class IngestionTest(unittest.TestCase):
         poly = normalize_market(POLY, "polymarket", NOW)
         self.assertEqual(kalshi["close_time"], poly["close_time"])
         self.assertEqual(kalshi["close_time"].hour, 19)
-        self.assertEqual(kalshi["yes_ask"], Decimal("0.43"))
+        self.assertEqual(kalshi["id"], "K-EXAMPLE")
         self.assertEqual(poly["tokens"], {"yes": "20", "no": "10"})
 
     def test_ignores_non_tradable_or_out_of_window_markets(self):
