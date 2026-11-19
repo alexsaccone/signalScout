@@ -50,16 +50,84 @@ SPORTS_SESSION = re.compile(r"\b(?:\d{1,2}(?::\d{2})? [ap]m [A-Z]{2,4}|(?:game|l
 UNNAMED = re.compile(r"\b(?:listed|selected|specified) (?:player|team)\b|\bthe (?:home team|away team|player)\b", re.I)
 SOURCE_URL = re.compile(r'https?://[^\s<>()"]+')
 
+CLOCK = re.compile(r"\bat (0?[1-9]|1[0-2])(?::([0-5]\d))? ([ap])\.?m\.? (ET|CT|MT|PT|UTC)\b", re.I)
+QUOTED = re.compile(r'("[^"]*"|“[^”]*”)')
+STAT_THRESHOLD = re.compile(
+    r'^([^"“”]+?) (?:scores|records) '
+    r'(?:(at least|no fewer than|greater than|more than|at most|no more than|less than|exactly) (\d+)'
+    r'|(\d+)(\+| or more| or fewer)) (points|assists|rebounds|goals|touchdowns)(?= in the )'
+)
+STAT_COMPARISON = {
+    "at least": "at least", "no fewer than": "at least", "or more": "at least", "+": "at least",
+    "greater than": "more than", "more than": "more than",
+    "at most": "at most", "no more than": "at most", "or fewer": "at most",
+    "less than": "less than", "exactly": "exactly",
+}
+SENTENCE_START = r'(?:^|(?<=\. )|(?<=\." ))'
+SETTLEMENT_CLAUSE = re.compile(
+    rf'(?P<literal>{QUOTED.pattern})|{SENTENCE_START}(?:'
+    rf'Use (?P<use_source>{SOURCE_URL.pattern}) as the official source\.'
+    rf'|The resolution source for this market (?:is|will be) (?P<is_source>{SOURCE_URL.pattern})\.'
+    r'|If the (?P<event>game|match|fight) is cancell?ed, '
+    r'(?:settle at |(?:the|this) market (?:resolves|will resolve)(?: to)? )'
+    r'(?:"50-50\."|"50-50"\.|50-50\.)'
+    r'|(?P<default>Otherwise, (?:the|this) market (?:resolves|will resolve) to (?:"No\."|"No"\.|No\.))'
+    r')(?= |$)'
+)
+
 
 def iso_date(match):
     month, day, year = match.groups()
     return date(int(year), MONTH_NUMBER[month.lower()], int(day)).isoformat()
 
 
+def normalize_rule_text(text):
+    parts = QUOTED.split(text)
+    for index in range(0, len(parts), 2):
+        part = re.sub(r"\s+", " ", parts[index])
+        part = EVENT_DATE.sub(iso_date, part)
+        parts[index] = CLOCK.sub(
+            lambda m: f"at {int(m[1])}:{m[2] or '00'} {m[3].upper()}M {m[4].upper()}", part,
+        )
+    return "".join(parts).strip()
+
+
+def normalize_condition(condition):
+    stat = STAT_THRESHOLD.match(condition)
+    if stat:
+        player, prefix, prefixed_number, suffixed_number, suffix, unit = stat.groups()
+        comparison = STAT_COMPARISON[prefix or suffix.strip()]
+        condition = f"{player} records {comparison} {prefixed_number or suffixed_number} {unit}" + condition[stat.end():]
+
+    matchup = MATCHUP.search(condition)
+    if matchup:
+        name = re.sub(r" (?:vs\.?|versus) ", " vs ", matchup[0])
+        condition = condition[:matchup.start()] + name + condition[matchup.end():]
+    return condition
+
+
+def normalize_settlement_terms(remaining):
+    sources = set()
+
+    def normalize_clause(match):
+        if match["literal"]:
+            return match[0]
+        if match["event"]:
+            return f'If the {match["event"]} is canceled, settle at 50-50.'
+        if match["default"]:
+            return "Otherwise, this market will resolve to No."
+        sources.add(match["use_source"] or match["is_source"])
+        return ""
+
+    # Only a standalone source declaration can move without changing precedence.
+    remaining = SETTLEMENT_CLAUSE.sub(normalize_clause, remaining)
+    return normalize_rule_text(remaining), frozenset(sources)
+
+
 def settlement_key(market):
     try:
-        rules = EVENT_DATE.sub(iso_date, " ".join(market["rules"].split()))
-        secondary = EVENT_DATE.sub(iso_date, " ".join(market["secondary_rules"].split()))
+        rules = normalize_rule_text(market["rules"])
+        secondary = normalize_rule_text(market["secondary_rules"])
     except ValueError:
         return None
     fixture = SCHEDULED_FIXTURE.match(rules)
@@ -81,14 +149,16 @@ def settlement_key(market):
         return None
 
     remaining = " ".join((rules[payout.end():], secondary)).strip()
-    sources = {url.rstrip(".,;!?") for url in SOURCE_URL.findall(remaining)}
+    remaining, declared_sources = normalize_settlement_terms(remaining)
+    sources = declared_sources or {url.rstrip(".,;!?") for url in SOURCE_URL.findall(remaining)}
     resolution = market["resolution"]
-    if not sources or (isinstance(resolution, str) and resolution and resolution.strip() not in sources):
+    if len(declared_sources) > 1 or not sources:
+        return None
+    if isinstance(resolution, str) and resolution and resolution.strip() not in sources:
         return None
 
-    # Reconcile common venue wrappers and date formats. Compare the complete
-    # condition and all subsequent clauses, including any exception or deadline.
-    return condition, remaining
+    # shortcut: Unrecognized terms must still match as written. Add rules for observed paraphrases.
+    return normalize_condition(condition), remaining, declared_sources
 
 
 def review_candidates(kalshi, polymarket):
