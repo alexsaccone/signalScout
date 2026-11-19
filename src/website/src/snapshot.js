@@ -1,0 +1,30 @@
+const MAX_AGE = 3 * 60 * 60 * 1000;
+
+export function validateSnapshot(snapshot) {
+  if (!snapshot || !["live", "fixture"].includes(snapshot.source) ||
+      !Number.isFinite(Date.parse(snapshot.generated_at)) ||
+      !Array.isArray(snapshot.odds) || !Array.isArray(snapshot.opportunities)) {
+    throw new Error("Invalid dashboard snapshot");
+  }
+  return snapshot;
+}
+
+export function dashboardState(snapshot, now) {
+  const generated = Date.parse(snapshot.generated_at);
+  const fixture = snapshot.source === "fixture";
+  const asOf = fixture ? generated : now;
+  const stale = !fixture && now - generated >= MAX_AGE;
+  const games = snapshot.odds.filter((game) => Date.parse(game.starts_at) > asOf);
+  const opportunities = snapshot.opportunities.map((row) => ({
+    ...row,
+    expired: stale || !(Date.parse(row.valid_until) > asOf),
+  }));
+  return { fixture, stale, games, opportunities };
+}
+
+export function filterGames(games, query, sport) {
+  const needle = query.trim().toLocaleLowerCase();
+  return games.filter((game) => (!sport || game.sport === sport) &&
+    [game.title, game.sport, ...game.outcomes.map((outcome) => outcome.name)]
+      .some((value) => value.toLocaleLowerCase().includes(needle)));
+}

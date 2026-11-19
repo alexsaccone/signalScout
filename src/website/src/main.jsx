@@ -1,0 +1,191 @@
+import React, { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { dashboardState, filterGames, validateSnapshot } from "./snapshot.js";
+import "./style.css";
+
+const fixtureLabel = "Fixture preview";
+const shortDate = new Intl.DateTimeFormat(undefined, {
+  month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+});
+const percent = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
+const currency = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
+
+function formatDate(value) {
+  return shortDate.format(new Date(value));
+}
+
+function Matchup({ game }) {
+  const [first, second] = game.outcomes;
+  const share = 100 * first.probability / (first.probability + second.probability);
+  return (
+    <article className="matchup">
+      <div className="matchup-name">
+        <span className="league">{game.sport}</span>
+        <h3><a href={game.url}>{game.title}</a></h3>
+        <time dateTime={game.starts_at}>{formatDate(game.starts_at)}</time>
+      </div>
+      <div className="probabilities">
+        <div className="probability-labels">
+          <span><strong>{percent.format(first.probability)}</strong> {first.name}</span>
+          <span>{second.name} <strong>{percent.format(second.probability)}</strong></span>
+        </div>
+        <div className="odds-rail" aria-hidden="true" style={{ "--share": share + "%" }}></div>
+      </div>
+    </article>
+  );
+}
+
+function Opportunities({ rows }) {
+  return (
+    <section id="opportunities" aria-labelledby="opportunities-heading" className="opportunities">
+      <h2 id="opportunities-heading">Reviewed opportunities</h2>
+      <p className="muted">Estimated net return after venue fees.</p>
+      {rows.length === 0 ? (
+        <div className="message">
+          <p className="message-title">No opportunities in this snapshot</p>
+          <p>Only reviewed contract pairs with positive estimated net returns appear here.</p>
+        </div>
+      ) : (
+        <ul className="opportunity-list">
+          {rows.map((row) => (
+            <li key={row.kalshi_id + ":" + row.polymarket_id + ":" + row.kalshi_side}>
+              <div className="quote-heading">
+                <p className="opportunity-name">{row.kalshi_name}</p>
+                {row.expired && <span className="tag warning">Expired quote</span>}
+              </div>
+              <p className="legs">Kalshi {row.kalshi_side.toUpperCase()} · Polymarket {row.polymarket_side.toUpperCase()}</p>
+              <dl className="quote-stats">
+                <div><dt>Net return</dt><dd>{percent.format(Number(row.net_return_pct) / 100)}</dd></div>
+                <div><dt>Net profit</dt><dd>{currency.format(Number(row.estimated_net_profit))}</dd></div>
+                <div><dt>Contracts</dt><dd>{row.max_contracts}</dd></div>
+              </dl>
+              <p className="quote-time">Quoted <time dateTime={row.quote_at}>{formatDate(row.quote_at)}</time></p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function App() {
+  const [snapshot, setSnapshot] = useState(null);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [request, setRequest] = useState(0);
+  const [now, setNow] = useState(Date.now);
+  const [query, setQuery] = useState("");
+  const [sport, setSport] = useState("");
+  const [limit, setLimit] = useState(12);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function load() {
+      setLoading(true);
+      setError(false);
+      try {
+        const response = await fetch("snapshot.json", { signal: controller.signal, cache: "no-cache" });
+        if (!response.ok) throw new Error("Snapshot missing");
+        setSnapshot(validateSnapshot(await response.json()));
+        setNow(Date.now());
+      } catch {
+        if (!controller.signal.aborted) setError(true);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    load();
+    return () => controller.abort();
+  }, [request]);
+
+  useEffect(() => {
+    const ticker = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(ticker);
+  }, []);
+
+  const state = snapshot && dashboardState(snapshot, now);
+  const sports = state ? [...new Set(state.games.map((game) => game.sport))].sort() : [];
+  const filtered = state ? filterGames(state.games, query, sport) : [];
+  const update = () => setRequest((count) => count + 1);
+
+  return (
+    <>
+      <a className="skip" href="#content">Skip to dashboard</a>
+      <header className="masthead">
+        <div className="frame masthead-inner">
+          <div className="masthead-top">
+            <a className="wordmark" href="./"><span className="mark" aria-hidden="true"><i></i><i></i><i></i></span>SignalScout</a>
+            <nav aria-label="Dashboard sections">
+              <a href="#games">Upcoming games</a>
+              <a href="#opportunities">Opportunities</a>
+            </nav>
+          </div>
+          <div className="masthead-main">
+            <div>
+              <h1>Market monitor</h1>
+              <p>Upcoming game odds and reviewed cross-venue estimates.</p>
+            </div>
+            <div className="freshness" aria-live="polite">
+              {state && (
+                <>
+                  <span className={"tag " + (state.stale || error ? "warning" : "current")}>
+                    {state.fixture ? fixtureLabel : state.stale ? "Stale snapshot" : "Snapshot"}
+                  </span>
+                  <div>Updated <time dateTime={snapshot.generated_at}>{formatDate(snapshot.generated_at)}</time></div>
+                </>
+              )}
+              {!state && <span>{loading ? "Loading snapshot" : "Snapshot unavailable"}</span>}
+            </div>
+          </div>
+        </div>
+      </header>
+      <main className="frame workspace" id="content">
+        {error && <div className="notice" role="alert"><span>{state ? "Couldn’t refresh. Showing the last loaded snapshot." : "The dashboard snapshot couldn’t be loaded."}</span><button disabled={loading} onClick={update}>Retry</button></div>}
+        {state?.stale && <div className="notice">This snapshot is over three hours old. Upcoming odds may have changed.</div>}
+        <div className="columns">
+          <section aria-labelledby="games-heading" id="games" className="games">
+            <div className="section-heading">
+              <div>
+                <h2 id="games-heading">Upcoming games</h2>
+                <p className="muted">Polymarket moneyline prices, shown as implied probabilities.</p>
+              </div>
+              <button className="refresh" onClick={update} disabled={loading}>{loading ? "Refreshing…" : "Refresh data"}</button>
+            </div>
+            {state && (
+              <>
+                <div className="filters">
+                  <div>
+                    <label htmlFor="search">Find a matchup</label>
+                    <input id="search" type="search" placeholder="Search by team or league" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(12); }} />
+                  </div>
+                  <div>
+                    <label htmlFor="sport">League</label>
+                    <select id="sport" value={sport} onChange={(event) => { setSport(event.target.value); setLimit(12); }}>
+                      <option value="">All leagues</option>
+                      {sports.map((label) => <option key={label}>{label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="matchups" aria-live="polite">
+                  {filtered.length
+                    ? filtered.slice(0, limit).map((game) => <Matchup key={game.id} game={game} />)
+                    : <div className="message"><p className="message-title">{state.games.length ? "No matching games" : "No upcoming games in this snapshot"}</p>
+                      {state.games.length > 0 && <button onClick={() => { setQuery(""); setSport(""); }}>Clear filters</button>}</div>}
+                </div>
+                {filtered.length > limit && <button className="more" onClick={() => setLimit(limit + 12)}>Show more games</button>}
+              </>
+            )}
+            {!state && loading && <div className="skeleton" aria-label="Loading game odds"><span></span><span></span><span></span></div>}
+            {!state && !loading && <div className="message">Game odds will appear when a snapshot is available.</div>}
+          </section>
+          {state
+            ? <Opportunities rows={state.opportunities} />
+            : <section className="opportunities" id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
+        </div>
+      </main>
+      <footer className="frame"><a href="https://github.com/alexsaccone/signalScout">SignalScout on GitHub</a></footer>
+    </>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<App />);
