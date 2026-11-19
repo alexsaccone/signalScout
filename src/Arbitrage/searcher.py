@@ -1,14 +1,17 @@
 # comb through the list of markets and determine if arbitrage opportunities exist
-from formulas import *
-from api import *
 import json
 from datetime import datetime
 from datetime import date
-import torch
 
 import pandas as pd
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+if __package__:
+    from .api import more_kalshi, more_poly
+    from .formulas import arbitrage_pct, get_stakes, has_arbitrage, pct_return_per_day, profit_pct
+else:
+    from api import more_kalshi, more_poly
+    from formulas import arbitrage_pct, get_stakes, has_arbitrage, pct_return_per_day, profit_pct
 
 #Some room to spare
 end_of_year = datetime(2026, 1, 2).timestamp()
@@ -76,6 +79,8 @@ def filter_polymarket_events():
     return real_events
      
 def sentiment_analysis(kalshi, polymarket, topn=5):
+    from sentence_transformers import SentenceTransformer
+
     print("now starting sentiment analysis")
 
     model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu", trust_remote_code=False)
