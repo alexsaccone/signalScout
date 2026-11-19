@@ -114,6 +114,55 @@ class MatchingTest(unittest.TestCase):
                 changed = dict(poly, rules=poly["rules"].replace(old, new))
                 self.assertEqual(review_candidates([kalshi], [changed]), [])
 
+    def test_matches_whole_final_minute_and_exclusive_next_midnight(self):
+        kalshi, poly = self.matching_contracts()
+        kalshi["secondary_rules"] += (
+            " The result may be posted through Friday, Nov. 20, 2026 at 11:59 p.m. ET, "
+            "including the entire final minute."
+        )
+        for cutoff in (
+            "before midnight ET at the start of November 21, 2026",
+            "before 12:00 a.m. ET on November 21, 2026",
+            "before November 21, 2026 at 00:00 ET",
+        ):
+            with self.subTest(cutoff=cutoff):
+                right = dict(poly, rules=f"{poly['rules']} The result may be posted {cutoff}.")
+                [pair] = review_candidates([kalshi], [right])
+                self.assertEqual(pair["polymarket"]["rules"], right["rules"])
+
+    def test_ambiguous_cutoff_goes_to_manual_leads(self):
+        kalshi, poly = self.matching_contracts()
+        kalshi["rules"] = kalshi["rules"].replace(
+            ", then the market", ", with the result posted by Friday, Nov. 20, 2026 at 11:59 p.m. ET, then the market"
+        )
+        poly["rules"] = poly["rules"].replace(
+            " at 7 PM ET.", " at 7 PM ET, with the result posted by midnight ET on November 21, 2026."
+        )
+        self.assertEqual(review_candidates([kalshi], [poly]), [])
+        [lead] = review_leads([kalshi], [poly])
+        self.assertEqual(lead["reason"], "Compare the end-of-day cutoff wording")
+
+    def test_keeps_other_end_of_day_cutoffs_distinct(self):
+        kalshi, poly = self.matching_contracts()
+        kalshi["secondary_rules"] += " Use the value at November 20, 2026 at 11:59 p.m. ET."
+        right = dict(poly, rules=f"{poly['rules']} Use the value at November 21, 2026 at 12:00 a.m. ET.")
+        self.assertEqual(review_candidates([kalshi], [right]), [])
+
+        kalshi, poly = self.matching_contracts()
+        kalshi["secondary_rules"] += (
+            " The result may be posted through the end of the 11:59 p.m. ET minute on November 20, 2026."
+        )
+        for cutoff in (
+            "before midnight ET at the start of November 22, 2026",
+            "before midnight CT at the start of November 21, 2026",
+            "by November 21, 2026 at 12:00 a.m. ET",
+            "before midnight ET on November 21, 2026",
+            "before Sunday, November 21, 2026 at 12:00 a.m. ET",
+        ):
+            with self.subTest(cutoff=cutoff):
+                right = dict(poly, rules=f"{poly['rules']} The result may be posted {cutoff}.")
+                self.assertEqual(review_candidates([kalshi], [right]), [])
+
     def test_unrecognized_deadline_and_quoted_condition_stay_distinct(self):
         kalshi, poly = self.matching_contracts()
         kalshi["secondary_rules"] += " If no score is posted within 48 hours, settle at 50-50."

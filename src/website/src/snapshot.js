@@ -4,7 +4,8 @@ export function validateSnapshot(snapshot) {
   if (!snapshot || !["live", "fixture"].includes(snapshot.source) ||
       !Number.isFinite(Date.parse(snapshot.generated_at)) ||
       !Array.isArray(snapshot.odds) || !Array.isArray(snapshot.opportunities) ||
-      (snapshot.cancellation_only !== undefined && !Array.isArray(snapshot.cancellation_only))) {
+      (snapshot.cancellation_only !== undefined && !Array.isArray(snapshot.cancellation_only)) ||
+      (snapshot.matched_pairs !== undefined && !Array.isArray(snapshot.matched_pairs))) {
     throw new Error("Invalid dashboard snapshot");
   }
   return snapshot;
@@ -28,7 +29,8 @@ export function dashboardState(snapshot, now) {
     expired: stale || !(Date.parse(row.valid_until) > asOf),
   }));
   const cancellationOnly = (snapshot.cancellation_only ?? []).filter((row) => Date.parse(row.closes_at) > asOf);
-  return { fixture, stale, games, opportunities, cancellationOnly };
+  const matchedPairs = (snapshot.matched_pairs ?? []).filter((row) => Date.parse(row.closes_at) > asOf);
+  return { fixture, stale, games, opportunities, cancellationOnly, matchedPairs };
 }
 
 export function filterGames(games, query, sport) {

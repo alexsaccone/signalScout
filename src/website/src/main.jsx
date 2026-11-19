@@ -71,6 +71,30 @@ function Opportunities({ rows }) {
   );
 }
 
+function MatchedPairs({ rows, loading }) {
+  return (
+    <section id="matched-pairs" aria-labelledby="matches-heading">
+      <h2 id="matches-heading">Matched pairs</h2>
+      <p className="muted">All open pairs with matching settlement rules.</p>
+      {rows?.length ? (
+        <ul className="opportunity-list">
+          {rows.map((row) => (
+            <li key={row.kalshi_id + ":" + row.polymarket_id}>
+              <dl className="pair-venues">
+                <div><dt>Kalshi</dt><dd>{row.kalshi_title}</dd></div>
+                <div><dt>Polymarket</dt><dd>{row.polymarket_title}</dd></div>
+              </dl>
+              <p className="quote-time">Trading closes <time dateTime={row.closes_at}>{formatDate(row.closes_at)}</time></p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="message">{loading ? "Loading matches…" : rows ? "No matched pairs in this snapshot." : "Waiting for a snapshot."}</div>
+      )}
+    </section>
+  );
+}
+
 function CancellationDifferences({ rows }) {
   const payouts = { yes: "Yes pays $1", no: "No pays $1", "50-50": "Pays $0.50 per side" };
   return (
@@ -158,6 +182,7 @@ function App() {
             <nav aria-label="Dashboard sections">
               <a href="#games">Upcoming games</a>
               <a href="#opportunities">Opportunities</a>
+              <a href="#matched-pairs">Matched pairs</a>
               <a href="#cancellation-rules">Cancellation rules</a>
             </nav>
           </div>
@@ -228,6 +253,7 @@ function App() {
             {state
               ? <Opportunities rows={state.opportunities} />
               : <section id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
+            <MatchedPairs rows={state?.matchedPairs} loading={!state && loading} />
             <CancellationDifferences rows={state?.cancellationOnly ?? []} />
           </aside>
         </div>

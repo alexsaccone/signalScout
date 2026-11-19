@@ -8,7 +8,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from src.Arbitrage.dashboard import live_pairs
-from src.Arbitrage.searcher import market_terms, verified_pairs
+from src.Arbitrage.searcher import market_terms, review_candidates, review_leads, verified_pairs
 from src.Arbitrage.settlement_documents import Rulebook, text_policy
 from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, assessment_report
 
@@ -184,3 +184,36 @@ class SettlementVerificationTest(unittest.TestCase):
             row, = report["cancellation_only"]
             self.assertEqual((row["kalshi_cancellation"], row["polymarket_cancellation"]), ("no", "50-50"))
             self.assertFalse(report["verified"])
+
+    @patch("src.Arbitrage.settlement_verification.load_rulebook", return_value=Rulebook("same"))
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_full_assessment_prices_only_proven_equivalent_midnight_cutoffs(self, _, __):
+        left, right = contracts()
+        left["secondary_rules"] += (
+            " The result may be posted through the end of the 11:59 p.m. ET minute on November 20, 2026."
+        )
+        right["secondary_rules"] = "The result may be posted before 12:00 a.m. ET on November 21, 2026."
+        report = assessment_report(
+            [left], [right], review_candidates([left], [right]), review_leads([left], [right]), NOW,
+        )
+        self.assertEqual(len(report["verified"]), 1)
+
+        left["secondary_rules"] = left["secondary_rules"].replace(
+            "through the end of the 11:59 p.m. ET minute on", "by 11:59 p.m. ET on"
+        )
+        report = assessment_report(
+            [left], [right], review_candidates([left], [right]), review_leads([left], [right]), NOW,
+        )
+        self.assertEqual(report["verified"], [])
+        row, = report["manual_review"]
+        self.assertEqual(row["lead_reason"], "Compare the end-of-day cutoff wording")
+
+    def test_full_rulebook_compares_equivalent_cutoffs(self):
+        last_minute = pdf(
+            "A result counts through 11:59 p.m. ET on November 20, 2026, including the entire final minute."
+        )
+        midnight = pdf("A result counts before midnight ET at the start of November 21, 2026.")
+        ambiguous = pdf("A result counts by 11:59 p.m. ET on November 20, 2026.")
+        self.assertIsNotNone(last_minute.policy)
+        self.assertEqual(last_minute.policy, midnight.policy)
+        self.assertNotEqual(ambiguous.policy, midnight.policy)
