@@ -40,7 +40,7 @@ function Matchup({ game }) {
 
 function Opportunities({ rows }) {
   return (
-    <section id="opportunities" aria-labelledby="opportunities-heading" className="opportunities">
+    <section id="opportunities" aria-labelledby="opportunities-heading">
       <h2 id="opportunities-heading">Reviewed opportunities</h2>
       <p className="muted">Estimated net return after venue fees.</p>
       {rows.length === 0 ? (
@@ -63,6 +63,33 @@ function Opportunities({ rows }) {
                 <div><dt>Contracts</dt><dd>{row.max_contracts}</dd></div>
               </dl>
               <p className="quote-time">Quoted <time dateTime={row.quote_at}>{formatDate(row.quote_at)}</time></p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function CancellationDifferences({ rows }) {
+  const payouts = { yes: "Yes pays $1", no: "No pays $1", "50-50": "Pays $0.50 per side" };
+  return (
+    <section id="cancellation-rules" aria-labelledby="cancellation-heading">
+      <h2 id="cancellation-heading">Cancellation differences</h2>
+      <p className="muted">These pairs have different payouts if the event is canceled.</p>
+      {rows.length === 0 ? (
+        <div className="message">No cancellation-only pairs in this snapshot.</div>
+      ) : (
+        <ul className="opportunity-list">
+          {rows.map((row) => (
+            <li key={row.kalshi_id + ":" + row.polymarket_id}>
+              <h3 className="opportunity-name">{row.title}</h3>
+              {row.polymarket_title !== row.title && <p className="muted">{row.polymarket_title}</p>}
+              <dl className="quote-stats cancellation-payouts">
+                <div><dt>Kalshi</dt><dd>{payouts[row.kalshi_cancellation] ?? row.kalshi_cancellation}</dd></div>
+                <div><dt>Polymarket</dt><dd>{payouts[row.polymarket_cancellation] ?? row.polymarket_cancellation}</dd></div>
+              </dl>
+              <a className="quote-time" href={row.rulebook}>Governing rules</a>
             </li>
           ))}
         </ul>
@@ -131,6 +158,7 @@ function App() {
             <nav aria-label="Dashboard sections">
               <a href="#games">Upcoming games</a>
               <a href="#opportunities">Opportunities</a>
+              <a href="#cancellation-rules">Cancellation rules</a>
             </nav>
           </div>
           <div className="masthead-main">
@@ -196,9 +224,12 @@ function App() {
             {!state && loading && <div className="skeleton" aria-label="Loading game odds"><span></span><span></span><span></span></div>}
             {!state && !loading && <div className="message">Game odds will appear when a snapshot is available.</div>}
           </section>
-          {state
-            ? <Opportunities rows={state.opportunities} />
-            : <section className="opportunities" id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
+          <aside className="opportunities">
+            {state
+              ? <Opportunities rows={state.opportunities} />
+              : <section id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
+            <CancellationDifferences rows={state?.cancellationOnly ?? []} />
+          </aside>
         </div>
       </main>
       <footer className="frame"><a href="https://github.com/alexsaccone/signalScout">SignalScout on GitHub</a></footer>

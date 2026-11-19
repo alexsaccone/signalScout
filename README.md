@@ -10,20 +10,24 @@ shows when it finished checking and keeps the last loaded data if a check fails.
 A failed run leaves the previous snapshot online, with its original update
 time. Polymarket odds cover games starting within three days.
 
-Add confirmed reviews to `data/reviewed_pairs.json` to include them in the
-scheduled scan. An empty review list still publishes upcoming game odds.
+Every **Publish dashboard** run scans markets closing within 96 hours. The
+**settlement-review** artifact includes `assessment.json` with verified pairs,
+cancellation-only differences, and uncertain leads with the reason they need
+manual review. The scanner compares normalized market terms and retrieves
+Kalshi's binding series rulebook. Automatic verification requires Polymarket
+to explicitly adopt the same governing document and the published terms to
+match. Unfamiliar governing documents, missing evidence, and clauses the
+scanner cannot reconcile go to manual review. Resolution checks run in Python
+and use the venues' public APIs.
 
-Every **Publish dashboard** run also scans 96 hours of open markets. Download
-the **settlement-review** artifact from the run to see the strict matcher
-results in `candidates.json` and the wider shortlist in `review-leads.json`.
-The wider shortlist compares dated settlement conditions and includes both
-venues' terms for review. Check each venue's full rulebook, including the
-measurement period, result source, exclusions, and cancellation or fallback
-payout. Add the two reviewed market records to `data/reviewed_pairs.json`
-via a pull request. A merge triggers a fresh pricing and dashboard run, and
-later scheduled runs revalidate the approved terms before pricing. Discovery
-runs independently of the dashboard build, so an exchange outage affecting
-discovery can still allow the dashboard to publish.
+The workflow checks the verified market terms and the governing document again
+before pricing. Automatically verified pairs are included in that run; its
+artifact records the evidence. Add confirmed manual reviews to
+`data/reviewed_pairs.json` via a pull request to include them on scheduled
+runs. A merge triggers a fresh pricing and dashboard run. The dashboard shows
+**Cancellation differences** separately for pairs whose only proven difference
+is how they pay out when the event is canceled. If discovery fails, the
+workflow can still publish game odds and manually approved opportunities.
 
 To preview the dashboard offline, generate its labeled fixture snapshot from
 the repository root with the Python environment below.
