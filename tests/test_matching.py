@@ -2,8 +2,9 @@ from pathlib import Path
 from datetime import timedelta
 import json
 import unittest
+from unittest.mock import patch
 
-from src.Arbitrage.api import normalize_market, utc_timestamp
+from src.Arbitrage.api import normalize_market, POLY_US, utc_timestamp
 from src.Arbitrage.searcher import review_candidates, review_leads, verified_pairs
 
 
@@ -51,6 +52,14 @@ class MatchingTest(unittest.TestCase):
 
     def test_title_similarity_without_full_terms_is_insufficient(self):
         self.assertEqual(review_candidates([self.kalshi], [self.poly]), [])
+
+    def test_discovery_limits_apply_independently_to_each_polymarket_venue(self):
+        left, international = self.matching_contracts()
+        markets = [dict(international, id="A", venue=POLY_US), dict(international, id="B", venue=POLY_US), international]
+        expected = {"A", international["id"]}
+        with patch.multiple("src.Arbitrage.searcher", MAX_SUGGESTIONS=1, MAX_LEADS=1, MAX_POSTINGS=2):
+            self.assertEqual({row["polymarket"]["id"] for row in review_candidates([left], markets)}, expected)
+            self.assertEqual({row["polymarket"]["id"] for row in review_leads([left], markets)}, expected)
 
     def test_reworded_titles_and_equivalent_terms_are_suggested_for_review(self):
         kalshi, poly = self.matching_contracts()
