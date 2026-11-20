@@ -13,8 +13,8 @@ export function validateSnapshot(snapshot) {
   return snapshot;
 }
 
-export async function loadSnapshot(signal, refreshAt, request = globalThis.fetch) {
-  const url = refreshAt === null ? "snapshot.json" : "snapshot.json?refresh=" + refreshAt;
+export async function loadSnapshot(signal, refreshAt, request = globalThis.fetch, path = "snapshot.json") {
+  const url = refreshAt === null ? path : path + "?refresh=" + refreshAt;
   const response = await request(url, { signal, cache: "no-store" });
   if (!response.ok) throw new Error("Snapshot unavailable");
   return validateSnapshot(await response.json());

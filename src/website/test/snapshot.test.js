@@ -48,9 +48,11 @@ test("manual refresh bypasses browser and CDN caches and uses the new snapshot",
   };
   assert.deepEqual(await loadSnapshot(signal, null, request), snapshot);
   assert.deepEqual(await loadSnapshot(signal, now, request), newer);
+  assert.deepEqual(await loadSnapshot(signal, now, request, "../snapshot.json"), newer);
   assert.deepEqual(calls, [
     ["snapshot.json", { signal, cache: "no-store" }],
     ["snapshot.json?refresh=" + now, { signal, cache: "no-store" }],
+    ["../snapshot.json?refresh=" + now, { signal, cache: "no-store" }],
   ]);
 });
 
