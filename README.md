@@ -2,8 +2,10 @@
 
 ## Market dashboard
 
-The [SignalScout dashboard](https://alexsaccone.github.io/signalScout/) shows
-upcoming Polymarket moneyline odds and estimates for reviewed contract pairs.
+The [Markets page](https://alexsaccone.github.io/signalScout/) shows estimates
+for reviewed contract pairs and documented settlement differences. The
+[Games page](https://alexsaccone.github.io/signalScout/games/) shows upcoming
+Polymarket moneyline odds.
 **Matched pairs** lists all open verified pairs, including pairs without a
 profitable quote.
 The GitHub Actions workflow refreshes the snapshot roughly every two hours.

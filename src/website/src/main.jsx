@@ -4,6 +4,8 @@ import { dashboardState, filterGames, loadSnapshot } from "./snapshot.js";
 import "./style.css";
 
 const fixtureLabel = "Fixture preview";
+const gamesPage = document.body.dataset.page === "games";
+const marketHome = gamesPage ? "../" : "./";
 const shortDate = new Intl.DateTimeFormat(undefined, {
   month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
 });
@@ -205,7 +207,7 @@ function App() {
       setLoading(true);
       setError(false);
       try {
-        const next = await loadSnapshot(controller.signal, request ? Date.now() : null);
+        const next = await loadSnapshot(controller.signal, request ? Date.now() : null, undefined, marketHome + "snapshot.json");
         if (!active) return;
         const loadedAt = Date.now();
         setSnapshot(next);
@@ -242,51 +244,45 @@ function App() {
       <header className="masthead">
         <div className="frame masthead-inner">
           <div className="masthead-top">
-            <a className="wordmark" href="./"><span className="mark" aria-hidden="true"><i></i><i></i><i></i></span>SignalScout</a>
-            <nav aria-label="Dashboard sections">
-              <a href="#games">Upcoming games</a>
-              <a href="#opportunities">Opportunities</a>
-              <a href="#matched-pairs">Matched pairs</a>
-              <a href="#shared-events">Shared events</a>
-              <a href="#cancellation-rules">Cancellation rules</a>
+            <a className="wordmark" href={marketHome}><span className="mark" aria-hidden="true"><i></i><i></i><i></i></span>SignalScout</a>
+            <nav className="page-nav" aria-label="Main navigation">
+              <a href={marketHome} aria-current={gamesPage ? undefined : "page"}>Markets</a>
+              <a href={gamesPage ? "./" : "./games/"} aria-current={gamesPage ? "page" : undefined}>Games</a>
             </nav>
           </div>
           <div className="masthead-main">
             <div>
-              <h1>Market monitor</h1>
-              <p>Upcoming game odds and reviewed cross-venue estimates.</p>
+              <h1>{gamesPage ? "Upcoming games" : "Markets"}</h1>
+              <p>{gamesPage ? "Polymarket moneyline prices, shown as implied probabilities." :
+                "Verified contract pairs, settlement differences, and cross-venue returns."}</p>
             </div>
-            <div className="freshness" aria-live="polite">
-              {state && (
-                <>
-                  <span className={"tag " + (state.stale || error ? "warning" : "current")}>
-                    {state.fixture ? fixtureLabel : state.stale ? "Stale snapshot" : "Snapshot"}
-                  </span>
-                  <div>
-                    <div>Updated <time dateTime={snapshot.generated_at}>{formatDate(snapshot.generated_at)}</time></div>
-                    {checkedAt !== null && !loading && !error && (
-                      <div>Checked <time dateTime={new Date(checkedAt).toISOString()}>{checkTime.format(checkedAt)}</time></div>
-                    )}
-                  </div>
-                </>
-              )}
-              {!state && <span>{loading ? "Loading snapshot" : "Snapshot unavailable"}</span>}
+            <div className="snapshot-status">
+              <div className="freshness" aria-live="polite">
+                {state && (
+                  <>
+                    <span className={"tag " + (state.stale || error ? "warning" : "current")}>
+                      {state.fixture ? fixtureLabel : state.stale ? "Stale snapshot" : "Snapshot"}
+                    </span>
+                    <div>
+                      <div>Updated <time dateTime={snapshot.generated_at}>{formatDate(snapshot.generated_at)}</time></div>
+                      {checkedAt !== null && !loading && !error && (
+                        <div>Checked <time dateTime={new Date(checkedAt).toISOString()}>{checkTime.format(checkedAt)}</time></div>
+                      )}
+                    </div>
+                  </>
+                )}
+                {!state && <span>{loading ? "Loading snapshot" : "Snapshot unavailable"}</span>}
+              </div>
+              <button className="refresh" onClick={update} disabled={loading}>{loading ? "Refreshing…" : "Refresh data"}</button>
             </div>
           </div>
         </div>
       </header>
       <main className="frame workspace" id="content">
         {error && <div className="notice" role="alert"><span>{state ? "Couldn’t refresh. Showing the last loaded snapshot." : "The dashboard snapshot couldn’t be loaded."}</span><button disabled={loading} onClick={update}>Retry</button></div>}
-        {state?.stale && <div className="notice">This snapshot is over three hours old. Upcoming odds may have changed.</div>}
-        <div className="columns">
-          <section aria-labelledby="games-heading" id="games" className="games">
-            <div className="section-heading">
-              <div>
-                <h2 id="games-heading">Upcoming games</h2>
-                <p className="muted">Polymarket moneyline prices, shown as implied probabilities.</p>
-              </div>
-              <button className="refresh" onClick={update} disabled={loading}>{loading ? "Refreshing…" : "Refresh data"}</button>
-            </div>
+        {state?.stale && <div className="notice">This snapshot is over three hours old. Prices may have changed.</div>}
+        {gamesPage ? (
+          <section aria-label="Game odds" id="games" className="games">
             {state && (
               <>
                 <div className="filters">
@@ -314,7 +310,14 @@ function App() {
             {!state && loading && <div className="skeleton" aria-label="Loading game odds"><span></span><span></span><span></span></div>}
             {!state && !loading && <div className="message">Game odds will appear when a snapshot is available.</div>}
           </section>
-          <aside className="opportunities">
+        ) : (
+          <>
+            <nav className="section-links" aria-label="Market sections">
+              <a href="#opportunities">Opportunities</a>
+              <a href="#matched-pairs">Matched pairs</a>
+              <a href="#shared-events">Shared events</a>
+              <a href="#cancellation-rules">Cancellation rules</a>
+            </nav>
             <div className="market-control market-window">
               <label htmlFor="market-window">Cross-venue closing window</label>
               <select id="market-window" value={minimumDays} onChange={(event) => setMinimumDays(Number(event.target.value))}>
@@ -324,14 +327,16 @@ function App() {
                 <option value="365">Later close more than 1 year away</option>
               </select>
             </div>
-            {state
-              ? <Opportunities rows={state.opportunities} sort={sort} setSort={setSort} />
-              : <section id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
-            <MatchedPairs rows={state?.matchedPairs} loading={!state && loading} />
-            <SharedEvents rows={state?.sharedEvents} loading={!state && loading} />
-            <CancellationDifferences rows={state?.cancellationOnly ?? []} />
-          </aside>
-        </div>
+            <div className="market-grid">
+              {state
+                ? <Opportunities rows={state.opportunities} sort={sort} setSort={setSort} />
+                : <section id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
+              <MatchedPairs rows={state?.matchedPairs} loading={!state && loading} />
+              <SharedEvents rows={state?.sharedEvents} loading={!state && loading} />
+              <CancellationDifferences rows={state?.cancellationOnly ?? []} />
+            </div>
+          </>
+        )}
       </main>
       <footer className="frame"><a href="https://github.com/alexsaccone/signalScout">SignalScout on GitHub</a></footer>
     </>
