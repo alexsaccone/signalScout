@@ -238,17 +238,20 @@ def settlement_key(market):
 
 
 def review_candidates(kalshi, polymarket, key=settlement_key):
-    by_settlement = defaultdict(list)
+    by_settlement = defaultdict(lambda: defaultdict(list))
     for market in sorted(polymarket, key=lambda market: market["id"]):
         terms = key(market)
-        if terms is not None and len(by_settlement[terms]) < MAX_SUGGESTIONS:
-            by_settlement[terms].append(market)
+        if terms is not None:
+            venue_matches = by_settlement[terms][market.get("venue")]
+            if len(venue_matches) < MAX_SUGGESTIONS:
+                venue_matches.append(market)
 
     candidates = []
     for left in kalshi:
         candidates.extend(
             {"kalshi": market_terms(left), "polymarket": market_terms(right)}
-            for right in by_settlement.get(key(left), ())
+            for venue_matches in by_settlement.get(key(left), {}).values()
+            for right in venue_matches
         )
     return candidates
 
@@ -319,6 +322,7 @@ def cutoff_review_key(market):
 def review_leads(kalshi, polymarket):
     by_word = defaultdict(list)
     poly_terms = []
+    venues = dict.fromkeys(market.get("venue") for market in polymarket)
     for market in polymarket:
         info = lead_terms(market)
         if not info:
@@ -326,8 +330,9 @@ def review_leads(kalshi, polymarket):
         day, words = info
         index = len(poly_terms)
         poly_terms.append((market, words, lead_type(market['title'])))
+        venue = market.get("venue")
         for word in words:
-            posting = by_word[day, word]
+            posting = by_word[venue, day, word]
             if len(posting) <= MAX_POSTINGS:
                 posting.append(index)
 
@@ -337,41 +342,50 @@ def review_leads(kalshi, polymarket):
         if not info:
             continue
         day, words = info
-        postings = (by_word.get((day, word), ()) for word in words)
+        postings = (by_word.get((venue, day, word), ()) for venue in venues for word in words)
         overlaps = Counter(i for posting in postings if len(posting) <= MAX_POSTINGS for i in posting)
-        best = by_event[left["event_id"]]
         left_type = lead_type(left["title"])
+        groups = set()
         for i, common in overlaps.items():
+            if common < 3:
+                continue
             right, right_words, right_type = poly_terms[i]
             if left_type and right_type and left_type != right_type:
                 continue
             score = len(words & right_words) / len(words | right_words)
-            if common >= 3 and score >= 0.5:
-                best.append((-score, left["id"], right["id"], day, left, right))
-        best[:] = nsmallest(2, best, key=lambda lead: lead[:3])
+            if score >= 0.5:
+                group = right.get("venue"), left["event_id"]
+                by_event[group].append((-score, left["id"], right["id"], day, left, right))
+                groups.add(group)
+        for group in groups:
+            by_event[group] = nsmallest(2, by_event[group], key=lambda lead: lead[:3])
 
-    ranked = nsmallest(MAX_LEADS, (lead for group in by_event.values() for lead in group),
-                       key=lambda lead: lead[:3])
+    by_venue = defaultdict(list)
+    for (venue, _), group in by_event.items():
+        by_venue[venue].extend(group)
     cutoff_leads = review_candidates(kalshi, polymarket, key=cutoff_review_key)
     candidates = []
     for lead in cutoff_leads:
         left_key = settlement_key(lead["kalshi"])
         if left_key is None or left_key != settlement_key(lead["polymarket"]):
             candidates.append({"reason": "Compare the end-of-day cutoff wording", **lead})
-    candidates.extend({"event_date": day, "kalshi": market_terms(left), "polymarket": market_terms(right)}
-                      for _, _, _, day, left, right in ranked)
+    for venue_leads in by_venue.values():
+        ranked = nsmallest(MAX_LEADS, venue_leads, key=lambda lead: lead[:3])
+        candidates.extend({"event_date": day, "kalshi": market_terms(left), "polymarket": market_terms(right)}
+                          for _, _, _, day, left, right in ranked)
     events = {market["id"]: market["event_id"] for market in kalshi}
     seen_events = Counter()
+    seen_venues = Counter()
     unique = {}
     for lead in candidates:
         ids = lead["kalshi"]["id"], lead["polymarket"]["id"]
-        event_id = events[ids[0]]
-        if ids in unique or seen_events[event_id] >= 2:
+        venue = lead["polymarket"].get("venue")
+        group = venue, events[ids[0]]
+        if ids in unique or seen_events[group] >= 2 or seen_venues[venue] >= MAX_LEADS:
             continue
         unique[ids] = lead
-        seen_events[event_id] += 1
-        if len(unique) == MAX_LEADS:
-            break
+        seen_events[group] += 1
+        seen_venues[venue] += 1
     return list(unique.values())
 
 
