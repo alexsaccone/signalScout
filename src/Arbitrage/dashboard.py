@@ -77,6 +77,7 @@ def live_pairs(reviews, report, now):
             cancellation.append({
                 "kalshi_id": left["id"], "polymarket_id": right["id"],
                 "title": left["title"], "polymarket_title": right["title"],
+                "polymarket_venue": right.get("venue", "polymarket"),
                 "kalshi_cancellation": difference["kalshi_cancellation"],
                 "polymarket_cancellation": difference["polymarket_cancellation"],
                 "closes_at": min(left["close_time"], right["close_time"]).isoformat(),
@@ -91,9 +92,30 @@ def matched_pair_rows(pairs):
     rows = [{
         "kalshi_id": left["id"], "polymarket_id": right["id"],
         "kalshi_title": left["title"], "polymarket_title": right["title"],
+        "polymarket_venue": right.get("venue", "polymarket"), "polymarket_url": right.get("url"),
         "closes_at": min(left["close_time"], right["close_time"]).isoformat(),
+        "capital_until": max(left["close_time"], right["close_time"]).isoformat(),
     } for left, right in pairs]
     return sorted(rows, key=lambda row: (row["closes_at"], row["kalshi_title"], row["polymarket_id"]))
+
+
+def shared_event_rows(report):
+    results = []
+    for row in report.get("different_rules", []):
+        if not row.get("shared_event"):
+            continue
+        left, right = row["pair"]["kalshi"], row["pair"]["polymarket"]
+        earliest, latest = sorted((left["close_time"], right["close_time"]))
+        results.append({
+            "kalshi_id": left["id"], "polymarket_id": right["id"],
+            "kalshi_title": left["title"], "polymarket_title": right["title"],
+            "polymarket_venue": right.get("venue", "polymarket"), "polymarket_url": right.get("url"),
+            "kalshi_close": left["close_time"], "polymarket_close": right["close_time"],
+            "closes_at": earliest, "capital_until": latest, "difference": row["difference"],
+            "kalshi_rulebook": row["evidence"].get("kalshi_rulebook"),
+            "polymarket_rulebook": row["evidence"].get("polymarket_rulebook"),
+        })
+    return sorted(results, key=lambda row: (row["capital_until"], row["kalshi_title"]))
 
 
 def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
@@ -105,7 +127,8 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         pairs = list(verified_pairs(kalshi, polymarket, fixture["reviewed_pairs"]))
         opportunities = price_pairs(pairs, lambda: now, fixture_quotes(fixture["quotes"]))
         return {"source": "fixture", "generated_at": now.isoformat(), "odds": upcoming_odds(fixture["odds"], now),
-                "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs), "cancellation_only": []}
+                "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs),
+                "cancellation_only": [], "shared_events": []}
 
     now = datetime.now(timezone.utc)
     reviews = json.loads(reviews_path.read_text(encoding="utf-8"))
@@ -117,7 +140,7 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
     opportunities = price_pairs(pairs, lambda: datetime.now(timezone.utc))
     return {"source": "live", "generated_at": datetime.now(timezone.utc).isoformat(),
             "odds": games, "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs),
-            "cancellation_only": cancellation}
+            "cancellation_only": cancellation, "shared_events": shared_event_rows(report)}
 
 
 def main(argv=None):

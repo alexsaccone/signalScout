@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import re
 
@@ -6,11 +6,11 @@ import requests
 
 if __package__:
     from .api import KALSHI_URL, ScanError, fetch_json
-    from .searcher import CONTRACT_REFERENCE, review_candidates, rule_matches, settlement_key
+    from .searcher import CONTRACT_REFERENCE, next_role, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
     from .settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
 else:
     from api import KALSHI_URL, ScanError, fetch_json
-    from searcher import CONTRACT_REFERENCE, review_candidates, rule_matches, settlement_key
+    from searcher import CONTRACT_REFERENCE, next_role, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
     from settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
 
 
@@ -127,6 +127,24 @@ def document_lookup():
     return series_book, document
 
 
+def role_deadline_difference(left, right):
+    if "formally holds the position of" not in left["rules"] or "next person to assume the position of" not in right["rules"]:
+        return None
+    try:
+        kalshi, poly = next_role(left), next_role(right)
+    except ValueError:
+        return None
+    # Dates alone cannot establish an interval between adjacent civil days.
+    if not kalshi or not poly or kalshi[0] != poly[0] or abs(kalshi[1] - poly[1]) < timedelta(days=2):
+        return None
+    k_day, p_day = kalshi[1], poly[1]
+    k_payout, p_payout = ("Yes", "No") if k_day > p_day else ("No", "Yes")
+    return {"scenario": "The named candidate first takes office between the two deadlines",
+            "kalshi_cutoff": k_day.isoformat(), "polymarket_cutoff": p_day.isoformat(),
+            "kalshi_cutoff_inclusive": False, "polymarket_cutoff_inclusive": True,
+            "kalshi_payout": k_payout, "polymarket_payout": p_payout}
+
+
 def assessment_report(kalshi, polymarket, candidates, leads, now=None):
     report = {"generated_at": (now or datetime.now(timezone.utc)).isoformat(),
               "verified": [], "cancellation_only": [], "different_rules": [], "manual_review": []}
@@ -144,7 +162,7 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
 
     matches = review_candidates(kalshi, explicit_books, key=key) if explicit_books else []
     seen = set()
-    for candidate in matches + candidates + leads:
+    for candidate in matches + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
         left, right = candidate["kalshi"], candidate["polymarket"]
         ids = left["id"], right["id"]
         if ids in seen:
@@ -161,11 +179,18 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
                     "polymarket_rulebook": poly_url, "polymarket_sha256": poly_book.sha256 if poly_book else None}
         row = {"pair": {"kalshi": left, "polymarket": right}, "evidence": evidence}
         book_difference = book_cancellation_difference(kalshi_book, poly_book) if kalshi_book and poly_book else None
+        cutoff_difference = role_deadline_difference(left, right) if kalshi_book and poly_book else None
+        if cutoff_difference:
+            row["difference"] = cutoff_difference
+            row["shared_event"] = True
+            report["different_rules"].append(row)
+            continue
         if not kalshi_book:
             reason = "The full Kalshi contract terms could not be retrieved."
         elif difference := cancellation_mismatch(left, right, kalshi_book):
             row["difference"] = difference
             evidence["polymarket_source"] = "inline_rules"
+            row["shared_event"] = same_scheduled_fixture(left, right)
             report["different_rules"].append(row)
             continue
         elif not p_terms or not poly_book:

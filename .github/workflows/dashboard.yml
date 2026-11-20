@@ -24,7 +24,7 @@ jobs:
   settlement-review:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,9 +33,10 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - name: Discover pairs for settlement review
+        shell: bash
         run: |
           mkdir -p settlement-review
-          python -m src.Arbitrage.ai_filter --hours 96 --review-candidates settlement-review/candidates.json --review-leads settlement-review/review-leads.json --settlement-assessment settlement-review/assessment.json >> "$GITHUB_STEP_SUMMARY"
+          python -u -m src.Arbitrage.ai_filter --hours 26280 --review-candidates settlement-review/candidates.json --review-leads settlement-review/review-leads.json --settlement-assessment settlement-review/assessment.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: settlement-review

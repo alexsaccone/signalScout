@@ -1,15 +1,16 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
 if __package__:
-    from .api import KALSHI_URL, fetch_json
+    from .api import KALSHI_URL, POLY_US, POLY_US_URL, fetch_json, utc_timestamp
 else:
-    from api import KALSHI_URL, fetch_json
+    from api import KALSHI_URL, POLY_US, POLY_US_URL, fetch_json, utc_timestamp
 
 CLOB_URL = "https://clob.polymarket.com"
+US_STANDARD_TAKER_RATE = Decimal("0.095")
 MAX_QUOTE_AGE = timedelta(seconds=60)
 CLOCK_SKEW = timedelta(seconds=5)
 SIDES = (("yes", "no"), ("no", "yes"))
@@ -19,6 +20,7 @@ OUTPUT_FIELDS = (
     "kalshi_side", "polymarket_side", "polymarket_token",
     "kalshi_ask", "polymarket_ask", "max_contracts", "quote_at", "valid_until",
     "estimated_fees", "estimated_cost", "estimated_net_profit", "net_return_pct",
+    "polymarket_venue", "closes_at", "capital_until", "daily_roi_pct",
 )
 
 
@@ -93,6 +95,31 @@ def polymarket_quote(token, fetch):
     return Quote(price, size, observed_at, venue_number(book["min_order_size"]))
 
 
+def polymarket_us_quotes(market, fetch):
+    slug = quote(market["id"], safe="")
+    data = fetch(f"{POLY_US_URL}/v1/markets/{slug}/book")[0]["marketData"]
+    if data["marketSlug"] != market["id"] or data["state"] != "MARKET_STATE_OPEN":
+        return {}
+    observed_at = utc_timestamp(data["transactTime"])
+    if market["minimum_trade_qty"] is None:
+        return {}
+    minimum = venue_number(market["minimum_trade_qty"])
+    if not minimum.is_finite() or minimum <= 0:
+        return {}
+    quotes = {}
+    offers = [(venue_number(row["px"]["value"]), venue_number(row["qty"]))
+              for row in data["offers"] if row["px"]["currency"] == "USD"]
+    bids = [(venue_number(row["px"]["value"]), venue_number(row["qty"]))
+            for row in data["bids"] if row["px"]["currency"] == "USD"]
+    if offers:
+        price, size = min(offers)
+        quotes["yes"] = Quote(price, size, observed_at, minimum)
+    if bids:
+        price, size = max(bids)
+        quotes["no"] = Quote(1 - price, size, observed_at, minimum)
+    return quotes
+
+
 def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now):
     if not (left and right and left.usable(now) and right.usable(now)):
         return None
@@ -104,13 +131,23 @@ def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now):
     model_fee = (k_rate * kalshi_base * (1 - left.price)).quantize(Decimal(".000001"), rounding=ROUND_CEILING)
     kalshi_cost = (kalshi_base + model_fee).quantize(Decimal(".01"), rounding=ROUND_CEILING)
     poly_base = right.price * size
-    poly_fee = (p_rate * poly_base * (1 - right.price)).quantize(Decimal(".00001"), rounding=ROUND_CEILING)
+    poly_fee = p_rate * poly_base * (1 - right.price)
+    if poly.get("venue") == POLY_US:
+        poly_fee = poly_fee.quantize(Decimal(".01"), rounding=ROUND_HALF_EVEN)
+    else:
+        poly_fee = poly_fee.quantize(Decimal(".00001"), rounding=ROUND_CEILING)
     cost = kalshi_cost + poly_base + poly_fee
     profit = size - cost
     if profit <= 0:
         return None
 
     quoted_at = min(left.observed_at, right.observed_at)
+    closes_at = min(kalshi["close_time"], poly["close_time"])
+    capital_until = max(kalshi["close_time"], poly["close_time"])
+    days = Decimal(str((capital_until - quoted_at).total_seconds())) / Decimal(86400)
+    if days <= 0:
+        return None
+    net_return = 100 * profit / cost
     return {
         "kalshi_id": kalshi["id"], "polymarket_id": poly["id"],
         "kalshi_name": kalshi["title"], "polymarket_name": poly["title"],
@@ -119,7 +156,9 @@ def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now):
         "quote_at": quoted_at.isoformat(),
         "valid_until": min(quoted_at + MAX_QUOTE_AGE, kalshi["close_time"], poly["close_time"]).isoformat(),
         "estimated_fees": kalshi_cost - kalshi_base + poly_fee,
-        "estimated_cost": cost, "estimated_net_profit": profit, "net_return_pct": 100 * profit / cost,
+        "estimated_cost": cost, "estimated_net_profit": profit, "net_return_pct": net_return,
+        "polymarket_venue": poly.get("venue", "polymarket"), "closes_at": closes_at.isoformat(),
+        "capital_until": capital_until.isoformat(), "daily_roi_pct": net_return / days,
     }
 
 
@@ -128,14 +167,21 @@ def price_pairs(pairs, clock, fetch=fetch_json):
     for kalshi, poly in pairs:
         try:
             k_rate = kalshi_fee_rate(kalshi, fetch)
-            p_rate = polymarket_fee_rate(poly, fetch)
+            is_us = poly.get("venue") == POLY_US
+            if is_us:
+                coefficient = poly.get("fee_coefficient")
+                published_rate = US_STANDARD_TAKER_RATE if coefficient is None else venue_number(coefficient)
+                p_rate = max(US_STANDARD_TAKER_RATE, published_rate) if published_rate.is_finite() and published_rate >= 0 else None
+            else:
+                p_rate = polymarket_fee_rate(poly, fetch)
             if k_rate is None or p_rate is None or not k_rate.is_finite() or k_rate < 0:
                 continue
             quotes = kalshi_quotes(kalshi, fetch)
+            us_quotes = polymarket_us_quotes(poly, fetch) if is_us else {}
             for k_side, p_side in SIDES:
                 if k_side not in quotes:
                     continue
-                right = polymarket_quote(poly["tokens"][p_side], fetch)
+                right = us_quotes.get(p_side) if is_us else polymarket_quote(poly["tokens"][p_side], fetch)
                 now = clock()
                 if now >= min(kalshi["close_time"], poly["close_time"]):
                     continue
@@ -147,5 +193,5 @@ def price_pairs(pairs, clock, fetch=fetch_json):
     publish_time = clock()
     return sorted(
         (row for row in opportunities if publish_time < datetime.fromisoformat(row["valid_until"])),
-        key=lambda row: row["net_return_pct"], reverse=True,
+        key=lambda row: row["daily_roi_pct"], reverse=True,
     )

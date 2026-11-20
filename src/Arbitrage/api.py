@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from itertools import batched
+import re
 import json
 import logging
 from time import sleep
@@ -9,6 +10,11 @@ import requests
 
 KALSHI_URL = "https://external-api.kalshi.com/trade-api/v2"
 GAMMA_URL = "https://gamma-api.polymarket.com"
+POLY_US_URL = "https://gateway.polymarket.us"
+POLY_US = "polymarket_us"
+MAX_DISCOVERY_DAYS = 1095
+MAX_DISCOVERY_WINDOW = timedelta(days=MAX_DISCOVERY_DAYS)
+PUBLIC_SLUG = re.compile(r"[a-z0-9-]+")
 SCAN_WINDOW = timedelta(days=30)
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
@@ -85,6 +91,37 @@ def normalize_market(market, venue, now, window=SCAN_WINDOW):
                 ) if market.get(key) is not None} or "",
                 "close_time": close,
             }
+        elif venue == POLY_US:
+            if (market["active"] is not True or market["closed"] is not False or market.get("archived")
+                    or market.get("hidden") or market.get("status") != "MARKET_STATUS_OPEN"):
+                return None
+            close = utc_timestamp(market["endDate"])
+            sides = binary_values(market["marketSides"])
+            if ({side.get("long") for side in sides} != {False, True}
+                    or any(side.get("tradable") is not True for side in sides)):
+                return None
+            slug = market["slug"]
+            if not isinstance(slug, str) or not PUBLIC_SLUG.fullmatch(slug):
+                raise ValueError("Invalid Polymarket US symbol")
+            tokens = {"yes" if side["long"] else "no": side["id"] for side in sides}
+            if (len(set(tokens.values())) != 2 or any(not isinstance(token, str) or not token.isascii()
+                                                     or not token.isdigit() for token in tokens.values())
+                    or any(side.get("identifier") != slug for side in sides)):
+                raise ValueError("Invalid Polymarket US side identifiers")
+            title = market.get("title") or market["question"]
+            normalized = {
+                "id": slug, "venue": POLY_US, "title": title, "subtitle": "",
+                "rules": market.get("description") or "", "secondary_rules": "",
+                "resolution": "", "tokens": tokens, "close_time": close,
+                "minimum_trade_qty": market.get("minimumTradeQty"),
+                "fee_coefficient": market.get("feeCoefficient"),
+            }
+            event = next(iter(market.get("events") or []), {})
+            event_slug = event.get("slug")
+            if not event_slug and slug.startswith("nphc-"):
+                event_slug = slug.removeprefix("nphc-").rsplit("-", 1)[0]
+            if isinstance(event_slug, str) and PUBLIC_SLUG.fullmatch(event_slug):
+                normalized["url"] = f"https://polymarket.us/event/{event_slug}"
         else:
             if market["closed"] is not False or market["active"] is not True or market["acceptingOrders"] is not True:
                 return None
@@ -161,7 +198,7 @@ def market_rows(url, params, response_cursor, request_cursor, pages):
 
 def more_kalshi(pages, now, window=SCAN_WINDOW):
     params = {
-        "limit": 200, "mve_filter": "exclude",
+        "limit": 1000 if window > SCAN_WINDOW else 200, "mve_filter": "exclude",
         "min_close_ts": int(now.timestamp()),
         "max_close_ts": int((now + window).timestamp()),
     }
@@ -171,7 +208,7 @@ def more_kalshi(pages, now, window=SCAN_WINDOW):
 
 def more_poly(pages, now, window=SCAN_WINDOW):
     params = {
-        "limit": 100, "closed": "false",
+        "limit": 500 if window > SCAN_WINDOW else 100, "closed": "false",
         "end_date_min": now.isoformat(),
         "end_date_max": (now + window).isoformat(),
     }
@@ -179,13 +216,52 @@ def more_poly(pages, now, window=SCAN_WINDOW):
     return normalize_markets(rows, "polymarket", now, window)
 
 
+def poly_us_market_rows(params, pages):
+    limit = 500
+    seen = set()
+    with requests.Session() as session:
+        offset = 0
+        for _ in range(pages):
+            payload, _ = fetch_json(f"{POLY_US_URL}/v1/markets", {**params, "limit": limit, "offset": offset},
+                                    get=session.get)
+            rows = payload.get("markets") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                raise ScanError("Polymarket US returned an invalid market page")
+            if not rows:
+                return
+            slugs = [row.get("slug") if isinstance(row, dict) else None for row in rows]
+            ids = {slug for slug in slugs if isinstance(slug, str)}
+            if ids and not ids - seen:
+                raise ScanError("Polymarket US repeated a market page")
+            for row, slug in zip(rows, slugs):
+                if not isinstance(slug, str):
+                    yield row
+                elif slug not in seen:
+                    seen.add(slug)
+                    yield row
+            offset += len(rows)
+            if len(rows) < limit:
+                return
+    raise ScanError("Polymarket US page limit reached before the end of the feed")
+
+
+def more_poly_us(pages, now, window=SCAN_WINDOW):
+    params = {
+        "active": "true", "closed": "false", "archived": "false",
+        "endDateMin": now.isoformat(), "endDateMax": (now + window).isoformat(),
+    }
+    return normalize_markets(poly_us_market_rows(params, pages), POLY_US, now, window)
+
+
 def lookup_markets(ids, venue, now):
     selected = []
     for batch in batched(sorted(ids), 100):
         if venue == "kalshi":
             rows = market_rows(f"{KALSHI_URL}/markets", {"tickers": ",".join(batch)}, "cursor", "cursor", 2)
+        elif venue == POLY_US:
+            rows = poly_us_market_rows({"slug": list(batch), "active": "true", "closed": "false"}, 2)
         else:
             params = {"condition_ids": list(batch), "closed": "false", "limit": 100}
             rows = market_rows(f"{GAMMA_URL}/markets/keyset", params, "next_cursor", "after_cursor", 2)
-        selected.extend(market for market in normalize_markets(rows, venue, now) if market["id"] in ids)
+        selected.extend(market for market in normalize_markets(rows, venue, now, MAX_DISCOVERY_WINDOW) if market["id"] in ids)
     return selected

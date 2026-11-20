@@ -12,7 +12,10 @@ shows when it finished checking and keeps the last loaded data if a check fails.
 A failed run leaves the previous snapshot online, with its original update
 time. Polymarket odds cover games starting within three days.
 
-Every **Publish dashboard** run scans markets closing within 96 hours. The
+Every **Publish dashboard** run scans Kalshi, Polymarket International, and
+Polymarket US for markets closing within 1,095 days. The **Cross-venue
+closing window** filter shows open pairs with later trading closes more than
+4 days, 30 days, or a year away. The
 **settlement-review** artifact includes `assessment.json` with verified pairs,
 cancellation-only differences, proven rule mismatches, and uncertain leads.
 The scanner compares normalized market terms and complete governing PDFs.
@@ -34,7 +37,10 @@ artifact records the evidence. Add confirmed manual reviews to
 `data/reviewed_pairs.json` via a pull request to include them on scheduled
 runs. A merge triggers a fresh pricing and dashboard run. The dashboard shows
 **Cancellation differences** separately for pairs whose only proven difference
-is how they pay out when the event is canceled. If discovery fails, the
+is how they pay out when the event is canceled. **Shared events, different
+rules** lists documented payout conflicts, such as different deadlines for
+the same appointment. These contracts are excluded from opportunity pricing.
+If discovery fails, the
 workflow can still publish game odds and manually approved opportunities.
 
 To preview the dashboard offline, generate its labeled fixture snapshot from
@@ -73,8 +79,9 @@ python -m unittest discover -s tests -v
 
 ### Live scans
 
-Live discovery pulls public Kalshi and Polymarket markets closing within
-24 hours. Use `--hours` to adjust the discovery window. The discovery
+Live discovery pulls public Kalshi, Polymarket International, and Polymarket US
+markets closing within 24 hours by default. Use `--hours 26280` to scan the
+same 1,095-day window as the dashboard. The discovery
 command checks the dated event, participants, affirmative outcome, and published
 settlement terms, including the result source and exceptions. It writes pairs
 whose terms it can match to `candidates.json` for manual review. Discovery
@@ -91,7 +98,7 @@ from `candidates.json` into the JSON array in `data/reviewed_pairs.json`.
 The fixture shows the format under `reviewed_pairs`. When pricing, the
 scanner fetches reviewed markets by ID and checks that their terms and
 outcome tokens are current, that they are still tradable, and that they
-close within 30 days.
+close within the 1,095-day supported window.
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.Arbitrage.ai_filter --reviewed-pairs data/reviewed_pairs.json
@@ -102,7 +109,10 @@ The review file starts empty. Until a pair passes review and current pricing,
 
 The scanner uses the best available buy price and size on each order book,
 venue taker fees, and whole matched contracts. The CSV reports the older of
-the two quote times and estimated net return as a percentage. Quotes older
+the two quote times, total estimated net return, and daily ROI. Daily ROI is
+the net return percentage divided by the fractional days from the quote to
+the later listed trading close. Actual settlement can occur at a different time.
+The dashboard sorts opportunities by daily ROI by default. Quotes older
 than 60 seconds and unsupported fee models are skipped.
 
 A complete scan with no opportunities writes a header-only CSV. A failed or

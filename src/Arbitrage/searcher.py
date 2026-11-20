@@ -2,19 +2,24 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from heapq import nsmallest
 import re
+from unicodedata import normalize
 
 if __package__:
-    from .api import lookup_markets, more_kalshi, more_poly, ScanError, SCAN_WINDOW
+    from .api import POLY_US, lookup_markets, more_kalshi, more_poly, more_poly_us, ScanError, SCAN_WINDOW
 else:
-    from api import lookup_markets, more_kalshi, more_poly, ScanError, SCAN_WINDOW
+    from api import POLY_US, lookup_markets, more_kalshi, more_poly, more_poly_us, ScanError, SCAN_WINDOW
 
 
 def filter_kalshi_events(now, window=SCAN_WINDOW):
-    return more_kalshi(1000, now, window)
+    return more_kalshi(2000, now, window)
 
 
 def filter_polymarket_events(now, window=SCAN_WINDOW):
-    return more_poly(1000, now, window)
+    return more_poly(2000, now, window)
+
+
+def filter_polymarket_us_events(now, window=SCAN_WINDOW):
+    return more_poly_us(1000, now, window)
 
 
 def market_terms(market):
@@ -22,6 +27,10 @@ def market_terms(market):
     terms["close_time"] = market["close_time"].isoformat()
     if "tokens" in market:
         terms["tokens"] = market["tokens"]
+    if market.get("venue") == POLY_US:
+        terms["venue"] = POLY_US
+        if "url" in market:
+            terms["url"] = market["url"]
     return terms
 
 
@@ -30,7 +39,7 @@ DATED = r"\b\d{4}-\d{2}-\d{2}\b"
 IF_YES = re.compile(
     r'^If (.+?), (?:then )?(?:the|this) market (?:will resolve|resolves) to "?Yes"?\.(?: |$)', re.I,
 )
-YES_IF = r'^This market (?:will resolve|resolves) to "?Yes"? if ('
+YES_IF = r'^This market (?:will resolve|resolves|will settle|settles) to "?Yes"? if ('
 INLINE_YES = re.compile(rf'{YES_IF}.*?{DATED}.*?)\.(?: |$)', re.I)
 FIXTURE_YES = re.compile(rf'{YES_IF}.+?)\.(?: |$)', re.I)
 SCHEDULED_FIXTURE = re.compile(
@@ -52,7 +61,7 @@ UNNAMED = re.compile(r"\b(?:listed|selected|specified) (?:player|team)\b|\bthe (
 SOURCE_URL = re.compile(r'https?://[^\s<>()"]+')
 
 # Only an explicit incorporation clause makes a linked document governing.
-CONTRACT_REFERENCE = re.compile(r"^Governing contract terms: (https://[^\s]+?\.pdf)\.?[ \t]*\r?$", re.M)
+CONTRACT_REFERENCE = re.compile(r"^(?:Governing contract terms|For full rules, see): (https://[^\s]+?\.pdf)\.?[ \t]*\r?$", re.M)
 
 CLOCK = re.compile(r"\bat (0?[1-9]|1[0-2])(?::([0-5]\d))? ([ap])\.?m\.? (ET|CT|MT|PT|UTC)\b", re.I)
 CUTOFF_TIME = re.compile(r"11:59|12(?::00)? a\.?m|00:00|midnight", re.I)
@@ -366,6 +375,72 @@ def review_leads(kalshi, polymarket):
     return list(unique.values())
 
 
+NEXT_ROLE_RULES = (
+    re.compile(rf"^If (.+?) formally holds the position of (.+?) before ({DATED}), and is the first such subject\b", re.I),
+    re.compile(rf'^This market will settle to "?Yes"? if (.+?) is the next person to assume the position of (.+?) by ({DATED})\b', re.I),
+)
+
+
+def next_role(market):
+    rules = normalize_rule_text(market["rules"])
+    for pattern in NEXT_ROLE_RULES:
+        if match := pattern.match(rules):
+            person, role, day = match.groups()
+            return (person.casefold(), role.casefold()), date.fromisoformat(day)
+    return None
+
+
+def shared_role_leads(kalshi, polymarket):
+    right_sides = defaultdict(list)
+    for market in polymarket:
+        if not market["rules"].startswith("This market will settle to"):
+            continue
+        try:
+            info = next_role(market)
+        except ValueError:
+            continue
+        if info:
+            right_sides[info[0]].append(market)
+    for market in kalshi:
+        if "formally holds the position of" not in market["rules"]:
+            continue
+        try:
+            info = next_role(market)
+        except ValueError:
+            continue
+        if info:
+            for right in right_sides.get(info[0], ()):
+                yield {"kalshi": market_terms(market), "polymarket": market_terms(right)}
+
+
+def same_scheduled_fixture(left, right):
+    try:
+        fixture = SCHEDULED_FIXTURE.match(normalize_rule_text(right["rules"]))
+        left_rule = normalize_rule_text(left["rules"])
+    except ValueError:
+        return False
+    if not fixture:
+        return False
+    _, _, first, second, day, _ = fixture.groups()
+    marker = f" originally scheduled for {day}"
+    if marker not in left_rule:
+        return False
+    matchup = left_rule.split(marker)[0]
+    sides = re.split(r" \b(?:vs\.?|versus) ", matchup, flags=re.I)
+    if len(sides) != 2:
+        return False
+
+    def words(text):
+        ascii_text = normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
+        return [word for word in LEAD_WORD.findall(ascii_text) if word not in {"fc", "afc", "ac"}]
+
+    before, after = map(words, sides)
+    for home, away in ((words(first), words(second)), (words(second), words(first))):
+        if home and away and before[-len(home):] == home and after[:len(away)] == away:
+            return True
+    return False
+
+
 def verified_pairs(kalshi, polymarket, reviewed):
     by_kalshi_id = {market["id"]: market for market in kalshi}
     by_poly_id = {market["id"]: market for market in polymarket}
@@ -385,10 +460,18 @@ def verified_pairs(kalshi, polymarket, reviewed):
 
 
 def refresh_reviewed_pairs(reviews, now):
-    markets = []
-    for venue in ("kalshi", "polymarket"):
-        ids = {review[venue]["id"] for review in reviews}
-        if any(not isinstance(market_id, str) or not market_id.strip() for market_id in ids):
-            raise ScanError(f"Invalid reviewed {venue} market ID")
-        markets.append(lookup_markets(ids, venue, now))
-    return verified_pairs(*markets, reviews)
+    market_ids = defaultdict(set)
+    for review in reviews:
+        for venue, leg in (("kalshi", review["kalshi"]), (review["polymarket"].get("venue", "polymarket"),
+                                                        review["polymarket"])):
+            if venue not in {"kalshi", "polymarket", POLY_US}:
+                raise ScanError("Unsupported review venue")
+            market_id = leg["id"]
+            if not isinstance(market_id, str) or not market_id.strip():
+                raise ScanError(f"Invalid reviewed {venue} market ID")
+            market_ids[venue].add(market_id)
+    kalshi = lookup_markets(market_ids["kalshi"], "kalshi", now)
+    poly = lookup_markets(market_ids["polymarket"], "polymarket", now)
+    if market_ids[POLY_US]:
+        poly += lookup_markets(market_ids[POLY_US], POLY_US, now)
+    return verified_pairs(kalshi, poly, reviews)

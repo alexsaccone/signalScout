@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 from unittest import mock
 
-from src.Arbitrage.api import more_kalshi, more_poly, normalize_market
+from src.Arbitrage.api import lookup_markets, MAX_DISCOVERY_WINDOW, more_kalshi, more_poly, more_poly_us, normalize_market, POLY_US
 from src.Arbitrage.searcher import filter_polymarket_events
 
 
@@ -23,6 +23,28 @@ POLY = {
 
 
 class IngestionTest(unittest.TestCase):
+    def test_polymarket_us_discovers_and_rechecks_long_dated_binary_markets(self):
+        slug = "nphc-example-role-nominee"
+        payload = {
+            "slug": slug, "question": "Who will serve next?", "title": "Example Nominee",
+            "description": "Published settlement terms.",
+            "status": "MARKET_STATUS_OPEN", "active": True, "closed": False,
+            "endDate": "2029-01-20T00:00:00Z", "minimumTradeQty": "1",
+            "marketSides": [
+                {"id": "10", "identifier": slug, "long": False, "tradable": True},
+                {"id": "20", "identifier": slug, "long": True, "tradable": True},
+            ],
+        }
+        self.assertIsNone(normalize_market(payload, POLY_US, NOW))
+        with mock.patch("src.Arbitrage.api.requests.Session.get") as get:
+            get.return_value.json.return_value = {"markets": [payload]}
+            market, = more_poly_us(2, NOW, MAX_DISCOVERY_WINDOW)
+            self.assertEqual(get.call_args.kwargs["params"]["endDateMax"], (NOW + MAX_DISCOVERY_WINDOW).isoformat())
+            self.assertEqual(lookup_markets({slug}, POLY_US, NOW), [market])
+            self.assertEqual(get.call_args.kwargs["params"]["slug"], [slug])
+        self.assertEqual(market["tokens"], {"yes": "20", "no": "10"})
+        self.assertEqual(market["url"], "https://polymarket.us/event/example-role")
+
     def test_current_payloads_use_utc_and_current_price_fields(self):
         kalshi = normalize_market(KALSHI, "kalshi", NOW)
         poly = normalize_market(POLY, "polymarket", NOW)

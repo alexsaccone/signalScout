@@ -7,7 +7,7 @@ from unittest.mock import patch
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from src.Arbitrage.dashboard import live_pairs
+from src.Arbitrage.dashboard import live_pairs, shared_event_rows
 from src.Arbitrage.searcher import market_terms, review_candidates, review_leads, verified_pairs
 from src.Arbitrage.settlement_documents import Rulebook, text_policy
 from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, assessment_report
@@ -64,6 +64,28 @@ class SettlementVerificationTest(unittest.TestCase):
     def assess(self, left, right):
         lead = {"kalshi": market_terms(left), "polymarket": market_terms(right)}
         return assessment_report([left], [right], [], [lead], NOW)
+
+    @patch("src.Arbitrage.settlement_verification.load_rulebook", side_effect=lambda url: Rulebook(url))
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_only_the_same_appointment_with_proven_different_cutoffs_goes_to_shared_events(self, _, __):
+        left, right = contracts()
+        left["rules"] = ("If Example Person formally holds the position of White House Press Secretary before "
+                         "January 20, 2029, and is the first such subject to do so, then the market resolves to Yes.")
+        right["rules"] = ('This market will settle to "Yes" if Example Person is the next person to assume the position '
+                          'of White House Press Secretary by December 31, 2027 at 11:59 PM ET.\n'
+                          'For full rules, see: https://polymarketexchange.com/files/product-terms/NPHC.pdf')
+        right.update(venue="polymarket_us", close_time=NOW + timedelta(days=425))
+        different_person = dict(right, id="poly-2", rules=right["rules"].replace("Example Person", "Other Person"))
+        ambiguous = dict(right, id="poly-3", rules=right["rules"].replace("December 31, 2027", "January 19, 2029"))
+        report = assessment_report([left], [right, different_person, ambiguous], [], [], NOW)
+        self.assertEqual(report["verified"], [])
+        self.assertEqual(len(report["manual_review"]), 1)
+        row, = shared_event_rows(report)
+        self.assertEqual(row["polymarket_venue"], "polymarket_us")
+        self.assertEqual(row["polymarket_id"], right["id"])
+        self.assertEqual(row["difference"]["kalshi_cutoff"], "2029-01-20")
+        self.assertEqual(row["difference"]["polymarket_cutoff"], "2027-12-31")
+        self.assertEqual((row["difference"]["kalshi_payout"], row["difference"]["polymarket_payout"]), ("Yes", "No"))
 
     @patch("src.Arbitrage.settlement_verification.load_rulebook", return_value=Rulebook("same"))
     @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)

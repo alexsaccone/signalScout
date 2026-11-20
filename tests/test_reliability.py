@@ -11,7 +11,7 @@ from unittest import mock
 import requests
 
 from src.Arbitrage.ai_filter import atomic_write, main
-from src.Arbitrage.api import fetch_json, more_kalshi, ScanError
+from src.Arbitrage.api import fetch_json, KALSHI_URL, more_kalshi, ScanError
 from src.Arbitrage.pricing import OUTPUT_FIELDS
 
 
@@ -50,15 +50,18 @@ class ReliabilityTest(unittest.TestCase):
             args = ["--reviewed-pairs", str(reviews), "--output", str(snapshot), "--review-candidates", str(candidates)]
             partial = response(200, {"markets": [{}], "cursor": "next"})
             failures = [partial] + [response(503)] * 3
-            with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=failures), mock.patch(
+            empty = response(200, {"markets": [], "cursor": ""})
+            def partial_fetch(url, **_):
+                return failures.pop(0) if url.startswith(KALSHI_URL) else empty
+
+            with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=partial_fetch), mock.patch(
                 "src.Arbitrage.api.sleep"
             ), redirect_stderr(StringIO()) as error:
                 self.assertEqual(main(args), 1)
                 self.assertIn("Scan failed", error.getvalue())
             self.assertEqual(snapshot.read_bytes(), b"previous snapshot\n")
 
-            empty = [response(200, {"markets": [], "cursor": ""}), response(200, {"markets": []})]
-            with mock.patch("src.Arbitrage.api.requests.Session.get", side_effect=empty), redirect_stdout(StringIO()) as output:
+            with mock.patch("src.Arbitrage.api.requests.Session.get", return_value=empty), redirect_stdout(StringIO()) as output:
                 self.assertEqual(main(args), 0)
                 self.assertIn("0 opportunities", output.getvalue())
             with snapshot.open(newline="", encoding="utf-8") as output:
