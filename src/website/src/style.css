@@ -48,7 +48,9 @@ button { min-height: 40px; border: 1px solid #aebed7; border-radius: 5px; paddin
 button:hover:not(:disabled) { background: #e7f0ff; border-color: #6e9ad8; }
 button:disabled { cursor: wait; opacity: .62; }
 .filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .38fr); gap: 12px; margin: 22px 0 17px; }
-.filters label { display: block; font-size: .88rem; font-weight: 620; margin-bottom: 5px; }
+.filters label, .market-control label { display: block; font-size: .88rem; font-weight: 620; margin-bottom: 5px; }
+.market-control { margin-top: 13px; }
+.market-window { margin: 0 0 22px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 input, select { width: 100%; min-height: 43px; border: 1px solid #aebed7; background: #fff; color: var(--ink); padding: 8px 11px; border-radius: 5px; }
 input::placeholder { color: var(--muted); }
 .matchups { border-top: 1px solid var(--line); }
@@ -79,9 +81,14 @@ time { font-variant-numeric: tabular-nums; }
 .quote-heading { display: flex; justify-content: space-between; align-items: start; gap: 7px; }
 .opportunity-name { font-size: 1rem; font-weight: 650; line-height: 1.28; }
 .legs { margin: 6px 0 13px; color: var(--muted); font-size: .82rem; }
-.quote-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 0 0 9px; }
+.quote-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 0 0 9px; }
 .quote-stats dt { font-size: .8rem; color: var(--muted); }
 .quote-stats dd { font-variant-numeric: tabular-nums; font-weight: 630; }
+.rule-scenario { margin: 5px 0 10px; color: var(--muted); font-size: .9rem; line-height: 1.45; }
+.rule-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.rule-comparison > div { border-left: 2px solid var(--line); padding-left: 8px; }
+.rule-comparison dt { font-size: .84rem; font-weight: 650; }
+.rule-comparison dd { margin-top: 3px; overflow-wrap: anywhere; }
 .notice { padding: 11px 14px; margin-bottom: 20px; border: 1px solid #d9ba76; background: #fff0ca; color: #603b14; border-radius: 5px; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .skeleton { padding-top: 20px; display: grid; gap: 16px; }
 .skeleton span { display: block; height: 39px; background: #e2e9f4; border-radius: 4px; }

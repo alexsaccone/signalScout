@@ -75,3 +75,19 @@ test("matched pairs appear without quotes and expire at their trading cutoff", (
   assert.deepEqual(dashboardState(withMatches, now + 60000).matchedPairs, []);
   assert.deepEqual(dashboardState(snapshot, now).matchedPairs, []);
 });
+
+test("far-future filtering applies to all cross-venue sections and daily ROI sorts numerically", () => {
+  const soon = { ...quote, closes_at: "2026-11-21T00:00:00Z", daily_roi_pct: "10", net_return_pct: "20" };
+  const later = { ...quote, closes_at: "2027-12-31T00:00:00Z", daily_roi_pct: "2", net_return_pct: "80" };
+  const far = { ...later, closes_at: "2027-06-01T00:00:00Z", capital_until: "2028-01-20T00:00:00Z" };
+  const data = validateSnapshot({ ...snapshot, opportunities: [later, soon], matched_pairs: [soon, far],
+    cancellation_only: [soon], shared_events: [far] });
+  assert.equal(dashboardState(data, now).opportunities[0].daily_roi_pct, "10");
+  assert.equal(dashboardState(data, now, 0, "net_return_pct").opportunities[0].net_return_pct, "80");
+  const future = dashboardState(data, now, 365);
+  assert.equal(future.opportunities.length, 1);
+  assert.deepEqual(future.matchedPairs, [far]);
+  assert.deepEqual(future.sharedEvents, [far]);
+  assert.deepEqual(future.cancellationOnly, []);
+  assert.deepEqual(dashboardState(data, Date.parse(far.closes_at)).sharedEvents, []);
+});

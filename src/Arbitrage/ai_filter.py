@@ -1,4 +1,5 @@
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import csv
 from datetime import datetime, timedelta, timezone
 import json
@@ -9,15 +10,15 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import urlencode
 
 if __package__:
-    from .api import ScanError, normalize_markets, utc_timestamp
+    from .api import MAX_DISCOVERY_DAYS, ScanError, normalize_markets, utc_timestamp
     from .pricing import OUTPUT_FIELDS, price_pairs
     from .settlement_verification import assessment_report
-    from .searcher import filter_kalshi_events, filter_polymarket_events, refresh_reviewed_pairs, review_candidates, review_leads, verified_pairs
+    from .searcher import filter_kalshi_events, filter_polymarket_events, filter_polymarket_us_events, refresh_reviewed_pairs, review_candidates, review_leads, verified_pairs
 else:
-    from api import ScanError, normalize_markets, utc_timestamp
+    from api import MAX_DISCOVERY_DAYS, ScanError, normalize_markets, utc_timestamp
     from pricing import OUTPUT_FIELDS, price_pairs
     from settlement_verification import assessment_report
-    from searcher import filter_kalshi_events, filter_polymarket_events, refresh_reviewed_pairs, review_candidates, review_leads, verified_pairs
+    from searcher import filter_kalshi_events, filter_polymarket_events, filter_polymarket_us_events, refresh_reviewed_pairs, review_candidates, review_leads, verified_pairs
 
 
 def fixture_quotes(responses):
@@ -67,7 +68,13 @@ def scan(args):
         now = datetime.now(timezone.utc)
         if args.review_candidates or args.review_leads or args.settlement_assessment:
             window = timedelta(hours=args.hours)
-            kalshi, poly = filter_kalshi_events(now, window), filter_polymarket_events(now, window)
+            feeds = (filter_kalshi_events, filter_polymarket_events, filter_polymarket_us_events)
+            with ThreadPoolExecutor(max_workers=len(feeds)) as pool:
+                pending = [pool.submit(fetch, now, window) for fetch in feeds]
+                kalshi, poly, us = [scan.result() for scan in pending]
+            print(f"Discovered {len(kalshi)} Kalshi, {len(poly)} Polymarket International, "
+                  f"and {len(us)} Polymarket US markets")
+            poly += us
         reviews = []
 
     if args.reviewed_pairs:
@@ -122,8 +129,8 @@ def main(argv=None):
 
     if not (args.fixture or args.reviewed_pairs or args.review_candidates or args.review_leads or args.settlement_assessment):
         parser.error("provide --reviewed-pairs, --review-candidates, --review-leads, --settlement-assessment, or --fixture")
-    if not 1 <= args.hours <= 720:
-        parser.error("--hours must be between 1 and 720")
+    if not 1 <= args.hours <= MAX_DISCOVERY_DAYS * 24:
+        parser.error(f"--hours must be between 1 and {MAX_DISCOVERY_DAYS * 24}")
     if args.fixture and args.settlement_assessment:
         parser.error("--settlement-assessment requires live market rules")
     inputs = {path.resolve() for path in (args.fixture, args.reviewed_pairs) if path}

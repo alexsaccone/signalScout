@@ -16,7 +16,12 @@ else:
 KALSHI_BOOK = (
     r"https://(?:assets\.kalshi\.com|kalshi-public-docs\.s3\.amazonaws\.com)/contract_terms/[\w-]+\.pdf"
 )
-POLYMARKET_BOOK = r"https://(?:docs\.)?polymarket\.com/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.pdf"
+POLYMARKET_BOOK = (
+    r"https://(?:docs\.)?polymarket\.com/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.pdf"
+    r"|https://polymarketexchange\.com/files/product-terms/[a-zA-Z0-9_-]+\.pdf"
+    r"|https://polymarket-upload\.s3\.us-east-2\.amazonaws\.com/market_products/"
+    r"(?:[a-zA-Z0-9_+-]+/)*[a-zA-Z0-9_+-]+\.pdf"
+)
 OFFICIAL_RULEBOOK = re.compile(rf"(?:{KALSHI_BOOK}|{POLYMARKET_BOOK})")
 MAX_RULEBOOK_BYTES = 2_000_000
 TEXT_OPERATORS = set(b"BT ET Tf Tj TJ Tm Td TD T* ' \" Tc Tw Tz TL Ts Tr q Q cm rg RG g G k K BMC BDC EMC".split())
