@@ -6,6 +6,12 @@ import "./style.css";
 const fixtureLabel = "Fixture preview";
 const gamesPage = document.body.dataset.page === "games";
 const marketHome = gamesPage ? "../" : "./";
+const marketTabs = [
+  ["opportunities", "Opportunities"],
+  ["matched-pairs", "Matched pairs"],
+  ["shared-events", "Shared events"],
+  ["cancellation-rules", "Cancellation rules"],
+];
 const shortDate = new Intl.DateTimeFormat(undefined, {
   month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
 });
@@ -57,7 +63,7 @@ function Matchup({ game }) {
 
 function Opportunities({ rows, sort, setSort }) {
   return (
-    <section id="opportunities" aria-labelledby="opportunities-heading">
+    <section aria-labelledby="opportunities-heading">
       <h2 id="opportunities-heading">Reviewed opportunities</h2>
       <p className="muted">Daily ROI divides estimated net return after fees by the days until the later listed close.</p>
       <div className="market-control">
@@ -99,7 +105,7 @@ function Opportunities({ rows, sort, setSort }) {
 
 function MatchedPairs({ rows, loading }) {
   return (
-    <section id="matched-pairs" aria-labelledby="matches-heading">
+    <section aria-labelledby="matches-heading">
       <h2 id="matches-heading">Matched pairs</h2>
       <p className="muted">All open pairs with matching settlement rules.</p>
       {rows?.length ? (
@@ -126,7 +132,7 @@ function MatchedPairs({ rows, loading }) {
 function CancellationDifferences({ rows }) {
   const payouts = { yes: "Yes pays $1", no: "No pays $1", "50-50": "Pays $0.50 per side" };
   return (
-    <section id="cancellation-rules" aria-labelledby="cancellation-heading">
+    <section aria-labelledby="cancellation-heading">
       <h2 id="cancellation-heading">Cancellation differences</h2>
       <p className="muted">These pairs have different payouts if the event is canceled.</p>
       {rows.length === 0 ? (
@@ -152,7 +158,7 @@ function CancellationDifferences({ rows }) {
 
 function SharedEvents({ rows, loading }) {
   return (
-    <section id="shared-events" aria-labelledby="shared-events-heading">
+    <section aria-labelledby="shared-events-heading">
       <h2 id="shared-events-heading">Shared events, different rules</h2>
       <p className="muted">Contracts on the same event with a documented scenario where payouts differ.</p>
       {rows?.length ? (
@@ -183,6 +189,71 @@ function SharedEvents({ rows, loading }) {
         </ul>
       ) : <div className="message">{loading ? "Loading shared events…" : rows ? "No shared events with documented rule differences in this window." : "Waiting for a snapshot."}</div>}
     </section>
+  );
+}
+
+function marketTabFromHash() {
+  const hash = window.location.hash.slice(1);
+  return marketTabs.find(([id]) => id === hash)?.[0];
+}
+
+function MarketTabs({ panels, children }) {
+  const [selected, setSelected] = useState(() => marketTabFromHash() ?? marketTabs[0][0]);
+
+  useEffect(() => {
+    function followLocation() {
+      const tab = marketTabFromHash();
+      if (tab || !window.location.hash) setSelected(tab ?? marketTabs[0][0]);
+    }
+    window.addEventListener("popstate", followLocation);
+    window.addEventListener("hashchange", followLocation);
+    return () => {
+      window.removeEventListener("popstate", followLocation);
+      window.removeEventListener("hashchange", followLocation);
+    };
+  }, []);
+
+  function selectTab(id) {
+    if (id === selected) return;
+    window.history.pushState(null, "", "#" + id);
+    setSelected(id);
+  }
+
+  function handleTabKey(event, index) {
+    const last = marketTabs.length - 1;
+    let next;
+    switch (event.key) {
+      case "ArrowRight": next = index === last ? 0 : index + 1; break;
+      case "ArrowLeft": next = index === 0 ? last : index - 1; break;
+      case "Home": next = 0; break;
+      case "End": next = last; break;
+      default: return;
+    }
+    event.preventDefault();
+    const [id] = marketTabs[next];
+    document.getElementById("tab-" + id).focus();
+    selectTab(id);
+  }
+
+  return (
+    <>
+      <div className="market-tabs" role="tablist" aria-label="Market sections">
+        {marketTabs.map(([id, label], index) => (
+          <button key={id} type="button" role="tab" id={"tab-" + id} aria-controls={id}
+            aria-selected={id === selected} tabIndex={id === selected ? 0 : -1}
+            onClick={() => selectTab(id)} onKeyDown={(event) => handleTabKey(event, index)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {children}
+      {marketTabs.map(([id]) => (
+        <div key={id} className="market-panel" id={id} role="tabpanel" aria-labelledby={"tab-" + id}
+          tabIndex={0} hidden={id !== selected}>
+          {id === selected && panels[id]}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -311,13 +382,14 @@ function App() {
             {!state && !loading && <div className="message">Game odds will appear when a snapshot is available.</div>}
           </section>
         ) : (
-          <>
-            <nav className="section-links" aria-label="Market sections">
-              <a href="#opportunities">Opportunities</a>
-              <a href="#matched-pairs">Matched pairs</a>
-              <a href="#shared-events">Shared events</a>
-              <a href="#cancellation-rules">Cancellation rules</a>
-            </nav>
+          <MarketTabs panels={{
+            opportunities: state
+              ? <Opportunities rows={state.opportunities} sort={sort} setSort={setSort} />
+              : <section><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>,
+            "matched-pairs": <MatchedPairs rows={state?.matchedPairs} loading={!state && loading} />,
+            "shared-events": <SharedEvents rows={state?.sharedEvents} loading={!state && loading} />,
+            "cancellation-rules": <CancellationDifferences rows={state?.cancellationOnly ?? []} />,
+          }}>
             <div className="market-control market-window">
               <label htmlFor="market-window">Cross-venue closing window</label>
               <select id="market-window" value={minimumDays} onChange={(event) => setMinimumDays(Number(event.target.value))}>
@@ -327,15 +399,7 @@ function App() {
                 <option value="365">Later close more than 1 year away</option>
               </select>
             </div>
-            <div className="market-grid">
-              {state
-                ? <Opportunities rows={state.opportunities} sort={sort} setSort={setSort} />
-                : <section id="opportunities"><h2>Reviewed opportunities</h2><p className="muted">{loading ? "Loading snapshot…" : "Waiting for a snapshot."}</p></section>}
-              <MatchedPairs rows={state?.matchedPairs} loading={!state && loading} />
-              <SharedEvents rows={state?.sharedEvents} loading={!state && loading} />
-              <CancellationDifferences rows={state?.cancellationOnly ?? []} />
-            </div>
-          </>
+          </MarketTabs>
         )}
       </main>
       <footer className="frame"><a href="https://github.com/alexsaccone/signalScout">SignalScout on GitHub</a></footer>
