@@ -20,7 +20,12 @@ closing window** filter shows open pairs with later trading closes more than
 4 days, 30 days, or a year away. The
 **settlement-review** artifact includes `assessment.json` with verified pairs,
 cancellation-only differences, proven rule mismatches, and uncertain leads.
-The scanner compares normalized market terms and complete governing PDFs.
+The scanner compares inline settlement rules as well as governing PDFs.
+For Polymarket US markets without a PDF link it checks the official product
+certification catalog. An unlinked filing has to be a full certification that
+was in force at listing and is still in force. Polymarket International inline
+rules can establish a match when they cover the full Kalshi policy and the
+market and event have no published clarifications.
 When both markets reference governing PDFs, a pair can qualify through
 matching complete text under supported normalizations or an identical
 document. The scanner can also prove specific mismatches between published

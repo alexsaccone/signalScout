@@ -60,13 +60,13 @@ def live_games(now):
 
 
 def live_pairs(reviews, report, now):
-    verified = list(current_assessment_rows(report.get("verified", [])))
+    verified = list(current_assessment_rows(report.get("verified", []), now))
     differences = {
         (row["pair"]["kalshi"]["id"], row["pair"]["polymarket"]["id"]): row
-        for row in current_assessment_rows(report.get("cancellation_only", []))
+        for row in current_assessment_rows(report.get("cancellation_only", []), now)
     }
     rejected = [row for row in report.get("different_rules", []) if row["pair"] in reviews]
-    blocked = [row["pair"] for row in current_assessment_rows(rejected)]
+    blocked = [row["pair"] for row in current_assessment_rows(rejected, now)]
     reviews = [review for review in reviews if review not in blocked]
     checked = refresh_reviewed_pairs(reviews + [row["pair"] for row in verified] +
                                      [row["pair"] for row in differences.values()], now)

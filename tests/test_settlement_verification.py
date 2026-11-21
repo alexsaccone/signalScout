@@ -7,14 +7,20 @@ from unittest.mock import patch
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from src.Arbitrage.api import GAMMA_URL, POLY_US
 from src.Arbitrage.dashboard import live_pairs, shared_event_rows
 from src.Arbitrage.searcher import market_terms, review_candidates, review_leads, verified_pairs
-from src.Arbitrage.settlement_documents import Rulebook, text_policy
-from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, assessment_report
+from src.Arbitrage.settlement_documents import Rulebook, rule_policy, text_policy
+from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, RATING_BOOKS, assessment_report
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
 BOOK = "https://assets.kalshi.com/contract_terms/EXAMPLE.pdf"
 OTHER_BOOK = "https://docs.polymarket.com/markets/OTHER.pdf"
+ROTC_BOOK = "https://www.polymarketexchange.com/files/products/PMUS%20-%20ROTC%20-%20%282026.09.10%29.pdf"
+
+
+def rotc_catalog():
+    return {"ROTC": {"versions": {"2026-09-10": {"effective": "2026-09-14", "rule": "40.2"}}}}
 
 
 def contracts(payout="No", rulebook=BOOK):
@@ -64,6 +70,72 @@ class SettlementVerificationTest(unittest.TestCase):
     def assess(self, left, right):
         lead = {"kalshi": market_terms(left), "polymarket": market_terms(right)}
         return assessment_report([left], [right], [], [lead], NOW)
+
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_uses_unlinked_us_filing_and_invalidates_if_a_later_amendment_takes_effect(self, _):
+        left, right = contracts()
+        right.update(id="rotc-example", venue=POLY_US, listed_at="2026-10-01T00:00:00Z",
+                     rules=right["rules"].split("\nGoverning contract terms:", 1)[0].replace(
+                         "Use https://www.nba.com/stats as the official source.",
+                         "Outcome sourced from NBA (https://www.nba.com/stats).",
+                     ))
+        catalog = rotc_catalog()
+        with patch("src.Arbitrage.settlement_verification.load_filing_catalog", return_value=catalog), patch(
+            "src.Arbitrage.settlement_verification.load_rulebook",
+            side_effect={BOOK: Rulebook("same"), ROTC_BOOK: Rulebook("same")}.get,
+        ), patch("src.Arbitrage.dashboard.refresh_reviewed_pairs",
+                 side_effect=lambda reviews, now: verified_pairs([left], [right], reviews)):
+            report = assessment_report([left], [right], [], [], NOW)
+            row, = report["verified"]
+            self.assertEqual(row["evidence"]["polymarket_rulebook"], ROTC_BOOK)
+            self.assertEqual(live_pairs([], report, NOW)[0], [(left, right)])
+            catalog["ROTC"]["versions"]["2026-11-05"] = {"effective": "2026-11-12", "rule": "40.6"}
+            self.assertEqual(live_pairs([], report, NOW), ([], []))
+            row, = self.assess(left, right)["manual_review"]
+            self.assertIn("product certification", row["reason"])
+
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_inline_policy_can_verify_but_event_clarification_blocks_pricing(self, _):
+        left, right = contracts()
+        right.update(rules=right["rules"].split("\nGoverning contract terms:", 1)[0],
+                     market_id="100", market_event_id="200")
+        policy = rule_policy(right["rules"])
+        with patch("src.Arbitrage.settlement_verification.load_rulebook", return_value=Rulebook("full", policy)), patch(
+            "src.Arbitrage.settlement_verification.fetch_json", return_value=([], {}),
+        ) as fetch, patch("src.Arbitrage.dashboard.refresh_reviewed_pairs",
+                         side_effect=lambda reviews, now: verified_pairs([left], [right], reviews)):
+            report = assessment_report([left], [right], [], [], NOW)
+            row, = report["verified"]
+            self.assertEqual(row["evidence"]["polymarket_source"], "inline_rules")
+            self.assertEqual(fetch.call_args.args, (f"{GAMMA_URL}/market-clarifications", {"event_id": "200", "limit": 1}))
+            self.assertEqual(live_pairs([], report, NOW)[0], [(left, right)])
+            fetch.side_effect = lambda url, params: ([{}] if "event_id" in params else [], {})
+            self.assertEqual(live_pairs([], report, NOW), ([], []))
+            row, = self.assess(left, right)["manual_review"]
+            self.assertIn("clarifications", row["reason"])
+
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_same_film_at_the_exact_threshold_has_different_payouts(self, _):
+        left, right = contracts()
+        left.update(id="KXRT-FILM-45", resolution={"strike_type": "greater", "floor_strike": 45},
+                    rules="If Example Film has a Tomatometer score of above 45 on Nov 23, 2026 at 10:00 AM ET, "
+                          "then the market resolves to Yes.", secondary_rules="Only strictly greater scores count.")
+        right.update(id="rotc-film-gte45", venue=POLY_US, listed_at="2026-10-01T00:00:00Z",
+                     rules="This market will settle to Yes if Example Film has a Rotten Tomatoes Tomatometer score "
+                           "of 45 or more on November 23, 2026 at 10:00 AM ET. Outcome sourced from Rotten Tomatoes.")
+        digest = sha256(left["secondary_rules"].encode()).hexdigest()
+        docs = {BOOK: Rulebook(RATING_BOOKS[0]), ROTC_BOOK: Rulebook(RATING_BOOKS[1])}
+        with patch("src.Arbitrage.settlement_verification.load_filing_catalog", return_value=rotc_catalog()), patch(
+            "src.Arbitrage.settlement_verification.load_rulebook", side_effect=docs.get,
+        ), patch("src.Arbitrage.settlement_verification.RATING_KALSHI_SECONDARY", digest):
+            report = assessment_report([left], [right], [], [], NOW)
+            row, = shared_event_rows(report)
+            self.assertEqual(row["difference"]["scenario"], "The Tomatometer score is exactly 45%")
+            self.assertEqual(row["difference"]["kalshi_payout"], "No")
+            self.assertEqual(row["difference"]["polymarket_payout"], "Yes")
+            self.assertFalse(report["verified"])
+            right["rules"] = right["rules"].replace("10:00 AM", "9:00 AM")
+            self.assertFalse(self.assess(left, right)["different_rules"])
 
     @patch("src.Arbitrage.settlement_verification.load_rulebook", side_effect=lambda url: Rulebook(url))
     @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)

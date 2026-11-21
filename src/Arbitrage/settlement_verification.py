@@ -1,17 +1,24 @@
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from hashlib import sha256
 import re
 
 import requests
 
 if __package__:
-    from .api import KALSHI_URL, ScanError, fetch_json
-    from .searcher import CONTRACT_REFERENCE, next_role, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
-    from .settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
+    from .api import GAMMA_URL, KALSHI_URL, POLY_US, ScanError, fetch_json
+    from .searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
+    from .settlement_documents import (
+        KALSHI_BOOK, Rulebook, book_cancellation_difference, equivalent_rulebooks, filing_url,
+        load_filing_catalog, load_rulebook, rule_policy,
+    )
 else:
-    from api import KALSHI_URL, ScanError, fetch_json
-    from searcher import CONTRACT_REFERENCE, next_role, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
-    from settlement_documents import KALSHI_BOOK, book_cancellation_difference, equivalent_rulebooks, load_rulebook
+    from api import GAMMA_URL, KALSHI_URL, POLY_US, ScanError, fetch_json
+    from searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
+    from settlement_documents import (
+        KALSHI_BOOK, Rulebook, book_cancellation_difference, equivalent_rulebooks, filing_url,
+        load_filing_catalog, load_rulebook, rule_policy,
+    )
 
 
 CANCELLATION = re.compile(
@@ -25,6 +32,9 @@ UNBOUND_TERM = re.compile(
     r"\b(?:specified|listed|stated|shown) (?:in|on) (?:the |this )?(?:market )?(?:title|subtitle|question)\b", re.I,
 )
 DISCRETIONARY = re.compile(r"\b(?:fair (?:market )?price|refund|exchange discretion)\b", re.I)
+EXTERNAL_TERMS = re.compile(
+    r"\.pdf\b|\brulebook\b|\b(?:full|complete|governing) (?:market |contract )?(?:rules|terms)\b", re.I,
+)
 PAYOUT_MARKER = "\u241e"
 # Page numbers for the full Kalshi versions that were checked for the
 # before-play cancellation rule. A revised PDF needs a fresh review.
@@ -44,6 +54,14 @@ POLY_FIXED_CANCELLATION = re.compile(
     r'(?:, does not start by [^.]+? or is abandoned with no official result by that time)?'
     r', this market will resolve(?: to)? (?:"(No|50-50)(?:\."|"\.)|(No|50-50)\.)(?= |$)'
 )
+RATING_CONDITION = re.compile(
+    r"(.+?) has a (?:Rotten Tomatoes )?Tomatometer score of (above )?(\d{1,3})( or more)? "
+    r"on (\d{4}-\d{2}-\d{2} at \d{1,2}:\d{2} [AP]M ET)"
+)
+# Reviewed versions of Kalshi RT and Polymarket US ROTC.
+RATING_BOOKS = ("871c9d51b9e908ec3653bf71f6e1fb9f5f50ef7180cea9fc7c52a87753e08f2f",
+                "65f81b4acc4c9e10f88e86e7dc8d953c08758e556806a507f4e3784dc852b482")
+RATING_KALSHI_SECONDARY = "06615583780b946abfba8ff2de17f62c07d812c699740217dae5b08b1e061bea"
 
 
 def rulebook_url(series):
@@ -82,8 +100,6 @@ def comparable_terms(market):
     book = [match[1] for match in references.values()]
     if len(book) > 1 or PAYOUT_MARKER in rules + secondary:
         return None
-    if "tokens" in market and not book:
-        return None
     rules = CONTRACT_REFERENCE.sub(lambda m: "" if m.start() in references else m[0], rules).strip()
 
     primary_cancellation, secondary_cancellation = (rule_matches(CANCELLATION, text) for text in (rules, secondary))
@@ -104,9 +120,31 @@ def comparable_terms(market):
     if not key or not key[2]:
         return None
     prose = f"{key[0]} {key[1]}"
-    if UNBOUND_TERM.search(prose) or DISCRETIONARY.search(prose):
+    if UNBOUND_TERM.search(prose) or DISCRETIONARY.search(prose) or EXTERNAL_TERMS.search(prose):
         return None
     return key, book[0] if book else None, payout
+
+
+def inline_rulebook(market):
+    rules = f"{market['rules']}\n{market['secondary_rules']}"
+    if not EXTERNAL_TERMS.search(rules) and (policy := rule_policy(rules)):
+        return Rulebook(sha256(rules.encode("utf-8")).hexdigest(), policy)
+
+
+def market_clarifications(market_id, event_id):
+    if not all(isinstance(value, (int, str)) and re.fullmatch(r"[0-9]+", str(value))
+               for value in (market_id, event_id)):
+        return None
+    try:
+        for key, identifier in (("market_id", market_id), ("event_id", event_id)):
+            rows, _ = fetch_json(f"{GAMMA_URL}/market-clarifications", {key: identifier, "limit": 1})
+            if not isinstance(rows, list):
+                return None
+            if rows:
+                return True
+    except ScanError:
+        return None
+    return False
 
 
 def document_lookup():
@@ -124,7 +162,14 @@ def document_lookup():
         except requests.RequestException:
             return None
 
-    return series_book, document
+    @lru_cache(maxsize=1)
+    def catalog():
+        try:
+            return load_filing_catalog()
+        except (requests.RequestException, KeyError, TypeError, ValueError):
+            return {}
+
+    return series_book, document, catalog, lru_cache(maxsize=None)(market_clarifications)
 
 
 def role_deadline_difference(left, right):
@@ -145,12 +190,32 @@ def role_deadline_difference(left, right):
             "kalshi_payout": k_payout, "polymarket_payout": p_payout}
 
 
+def film_rating_key(market):
+    is_kalshi = market["id"].startswith("KXRT-")
+    if not is_kalshi and not (market.get("venue") == POLY_US and market["id"].startswith("rotc-")):
+        return None
+    parsed = published_condition(market)
+    if not parsed or not (match := RATING_CONDITION.fullmatch(parsed[0])):
+        return None
+    film, above, threshold, inclusive, cutoff = match.groups()
+    if is_kalshi:
+        strike = market["resolution"]
+        if (not above or inclusive or parsed[1] or not isinstance(strike, dict) or strike.get("strike_type") != "greater"
+                or strike.get("floor_strike") != int(threshold)):
+            return None
+    elif above or not inclusive or parsed[1] != "Outcome sourced from Rotten Tomatoes." or market["secondary_rules"]:
+        return None
+    return film.casefold(), int(threshold), cutoff
+
+
 def assessment_report(kalshi, polymarket, candidates, leads, now=None):
-    report = {"generated_at": (now or datetime.now(timezone.utc)).isoformat(),
+    now = now or datetime.now(timezone.utc)
+    report = {"generated_at": now.isoformat(),
               "verified": [], "cancellation_only": [], "different_rules": [], "manual_review": []}
     markets = {market["id"]: market for market in kalshi + polymarket}
-    explicit_books = [market for market in polymarket if CONTRACT_REFERENCE.search(market["rules"])]
-    series_book, document = document_lookup()
+    comparable = [market for market in polymarket if CONTRACT_REFERENCE.search(market["rules"])
+                  or any(phrase in market["rules"] for phrase in ("https://", "http://"))]
+    series_book, document, catalog, clarifications = document_lookup()
 
     @lru_cache(maxsize=None)
     def comparison(market_id):
@@ -160,9 +225,11 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         parsed = comparison(market["id"])
         return parsed[0] if parsed else None
 
-    matches = review_candidates(kalshi, explicit_books, key=key) if explicit_books else []
+    matches = review_candidates(kalshi, comparable, key=key) if comparable else []
+    rating_markets = [market for market in polymarket if market["id"].startswith("rotc-")]
+    rating_leads = review_candidates(kalshi, rating_markets, key=film_rating_key) if rating_markets else []
     seen = set()
-    for candidate in matches + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
+    for candidate in matches + rating_leads + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
         left, right = candidate["kalshi"], candidate["polymarket"]
         ids = left["id"], right["id"]
         if ids in seen:
@@ -174,33 +241,61 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         k_terms, p_terms = map(comparison, ids)
         references = list(rule_matches(CONTRACT_REFERENCE, right["rules"]).values())
         poly_url = references[0][1] if len(references) == 1 else None
-        poly_book = document(poly_url)
+        source = "linked_rulebook"
+        if not references:
+            if right.get("venue") == POLY_US:
+                source = "regulatory_filing"
+                poly_url = filing_url(right["id"], markets[right["id"]].get("listed_at"), catalog(), now.date())
+            elif not EXTERNAL_TERMS.search(f"{right['rules']} {right['secondary_rules']}"):
+                source = "inline_rules"
+        poly_book = inline_rulebook(right) if source == "inline_rules" else document(poly_url)
         evidence = {"kalshi_rulebook": url, "kalshi_sha256": kalshi_book.sha256 if kalshi_book else None,
-                    "polymarket_rulebook": poly_url, "polymarket_sha256": poly_book.sha256 if poly_book else None}
+                    "polymarket_source": source, "polymarket_rulebook": poly_url,
+                    "polymarket_sha256": poly_book.sha256 if poly_book else None}
+        if source == "regulatory_filing":
+            evidence["polymarket_listed_at"] = markets[right["id"]].get("listed_at")
+        elif source == "inline_rules":
+            evidence["polymarket_market_id"] = markets[right["id"]].get("market_id")
+            evidence["polymarket_event_id"] = markets[right["id"]].get("market_event_id")
         row = {"pair": {"kalshi": left, "polymarket": right}, "evidence": evidence}
         book_difference = book_cancellation_difference(kalshi_book, poly_book) if kalshi_book and poly_book else None
-        cutoff_difference = role_deadline_difference(left, right) if kalshi_book and poly_book else None
+        cutoff_difference = role_deadline_difference(left, right) if kalshi_book and poly_book and poly_url else None
         if cutoff_difference:
             row["difference"] = cutoff_difference
             row["shared_event"] = True
             report["different_rules"].append(row)
             continue
+        if (kalshi_book and poly_book and (kalshi_book.sha256, poly_book.sha256) == RATING_BOOKS
+                and sha256(" ".join(left["secondary_rules"].split()).encode("utf-8")).hexdigest() == RATING_KALSHI_SECONDARY):
+            rating = film_rating_key(left)
+            if rating and rating == film_rating_key(right):
+                row["difference"] = {"scenario": f"The Tomatometer score is exactly {rating[1]}%",
+                                     "kalshi_payout": "No", "polymarket_payout": "Yes"}
+                row["shared_event"] = True
+                report["different_rules"].append(row)
+                continue
         if not kalshi_book:
             reason = "The full Kalshi contract terms could not be retrieved."
-        elif difference := cancellation_mismatch(left, right, kalshi_book):
+        elif source == "inline_rules" and (difference := cancellation_mismatch(left, right, kalshi_book)):
             row["difference"] = difference
-            evidence["polymarket_source"] = "inline_rules"
             row["shared_event"] = same_scheduled_fixture(left, right)
             report["different_rules"].append(row)
             continue
-        elif not p_terms or not poly_book:
-            reason = "The full criteria could not be established from the published Polymarket rules."
+        elif not poly_book and source == "regulatory_filing":
+            reason = "An applicable full Polymarket US product certification could not be established."
+        elif not poly_book and source == "linked_rulebook":
+            reason = "The linked governing Polymarket PDF could not be established."
+        elif not poly_book or not p_terms:
+            reason = "The published Polymarket settlement criteria could not be parsed completely."
         elif not k_terms or k_terms[0] != p_terms[0]:
             reason = "The published settlement conditions or exceptions could not be shown to match."
         elif not book_difference and not equivalent_rulebooks(kalshi_book, poly_book):
             reason = "The complete governing documents could not be shown to be equivalent."
         elif k_terms[1] and document(k_terms[1]) != kalshi_book:
             reason = "The Kalshi market and series reference different governing terms."
+        elif source == "inline_rules" and clarifications(evidence["polymarket_market_id"],
+                                                         evidence["polymarket_event_id"]) is not False:
+            reason = "Polymarket clarifications exist or could not be ruled out."
         elif book_difference and any(re.search(r"\b(?:cancel\w*|abandon\w*|refund|void)\b",
                                               f"{leg['rules']} {leg['secondary_rules']}", re.I)
                                      for leg in (left, right)):
@@ -224,8 +319,9 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
     return report
 
 
-def current_assessment_rows(rows):
-    series_book, document = document_lookup()
+def current_assessment_rows(rows, now=None):
+    now = now or datetime.now(timezone.utc)
+    series_book, document, catalog, clarifications = document_lookup()
     for row in rows:
         evidence = row["evidence"]
         fingerprint = evidence.get("kalshi_sha256")
@@ -236,9 +332,21 @@ def current_assessment_rows(rows):
         kalshi_book = document(official_url)
         if not kalshi_book or kalshi_book.sha256 != fingerprint:
             continue
-        if evidence.get("polymarket_source") == "inline_rules":
+        source = evidence.get("polymarket_source")
+        if source == "inline_rules" and "difference" in row:
             yield row
             continue
-        poly_book = document(evidence.get("polymarket_rulebook"))
+        right = row["pair"]["polymarket"]
+        poly_url = evidence.get("polymarket_rulebook")
+        if source == "regulatory_filing" and poly_url != filing_url(
+            right["id"], evidence.get("polymarket_listed_at"), catalog(), now.date()
+        ):
+            continue
+        if source == "inline_rules":
+            if clarifications(evidence.get("polymarket_market_id"), evidence.get("polymarket_event_id")) is not False:
+                continue
+            poly_book = inline_rulebook(right)
+        else:
+            poly_book = document(poly_url)
         if poly_book and poly_book.sha256 == evidence.get("polymarket_sha256", fingerprint):
             yield row

@@ -108,6 +108,7 @@ SETTLEMENT_CLAUSE = re.compile(
     rf'(?P<literal>{QUOTED.pattern})|{SENTENCE_START}(?:'
     rf'Use (?P<use_source>{SOURCE_URL.pattern}) as the official source\.'
     rf'|The resolution source for this market (?:is|will be) (?P<is_source>{SOURCE_URL.pattern})\.'
+    rf'|Outcome sourced from [^()\n.]+ \((?P<outcome_source>{SOURCE_URL.pattern})\)\.'
     r'|If the (?P<event>game|match|fight) is cancell?ed, '
     r'(?:settle at |(?:the|this) market (?:resolves|will resolve)(?: to)? )'
     r'(?P<cancel_quote>")?(?P<cancel_payout>50-50|Yes|No)(?(cancel_quote)(?:"\.|\.")|\.)'
@@ -182,7 +183,7 @@ def normalize_settlement_terms(remaining):
             return f'If the {match["event"]} is canceled, settle at {match["cancel_payout"]}.'
         if match["default"]:
             return "Otherwise, this market will resolve to No."
-        sources.add(match["use_source"] or match["is_source"])
+        sources.add(match["use_source"] or match["is_source"] or match["outcome_source"])
         return ""
 
     # Only a standalone source declaration can move without changing precedence.
