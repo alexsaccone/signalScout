@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { dashboardState, filterGames, loadSnapshot } from "./snapshot.js";
+import { dashboardState, filterGames, groupSharedEvents, loadSnapshot } from "./snapshot.js";
 import "./style.css";
 
 const fixtureLabel = "Fixture preview";
@@ -76,23 +76,29 @@ function Opportunities({ rows, sort, setSort }) {
       {rows.length === 0 ? (
         <div className="message">
           <p className="message-title">No opportunities in this snapshot</p>
-          <p>Open pairs appear here when their estimated net return is positive.</p>
+          <p>Open pairs appear here when their minimum payout exceeds the cost of both legs after fees.</p>
         </div>
       ) : (
         <ul className="opportunity-list">
           {rows.map((row) => (
-            <li key={row.kalshi_id + ":" + row.polymarket_id + ":" + row.kalshi_side}>
+            <li key={row.kalshi_id + ":" + row.polymarket_id + ":" + row.kalshi_side + ":" + row.polymarket_side}>
               <div className="quote-heading">
                 <p className="opportunity-name">{row.kalshi_name}</p>
-                {row.expired && <span className="tag warning">Expired quote</span>}
+                <div className="quote-tags">
+                  {row.rule_difference && <span className="tag rule-variance">Different rules</span>}
+                  {row.expired && <span className="tag warning">Expired quote</span>}
+                </div>
               </div>
+              {row.rule_difference && <p className="muted">{row.polymarket_name}</p>}
               <p className="legs">Kalshi {row.kalshi_side.toUpperCase()} · {polymarketLabel(row.polymarket_venue)} {row.polymarket_side.toUpperCase()}</p>
               <dl className="quote-stats">
                 {row.daily_roi_pct != null && <div><dt>Daily ROI</dt><dd>{roi.format(Number(row.daily_roi_pct) / 100)}</dd></div>}
                 <div><dt>Total ROI</dt><dd>{roi.format(Number(row.net_return_pct) / 100)}</dd></div>
-                <div><dt>Net profit</dt><dd>{currency.format(Number(row.estimated_net_profit))}</dd></div>
+                <div><dt>{row.rule_difference ? "Minimum net profit" : "Net profit"}</dt><dd>{currency.format(Number(row.estimated_net_profit))}</dd></div>
                 <div><dt>Contracts</dt><dd>{row.max_contracts}</dd></div>
+                {row.rule_difference && <div><dt>Minimum payout</dt><dd>{currency.format(Number(row.minimum_payout))}</dd></div>}
               </dl>
+              {row.rule_difference && <p className="quote-time">{row.rule_difference}</p>}
               {row.capital_until && <p className="quote-time">Later close <CloseTime value={row.capital_until} /></p>}
               <p className="quote-time">Quoted <time dateTime={row.quote_at}>{formatDate(row.quote_at)}</time></p>
             </li>
@@ -157,38 +163,53 @@ function CancellationDifferences({ rows }) {
 }
 
 function SharedEvents({ rows, loading }) {
+  const groups = groupSharedEvents(rows);
   return (
     <section aria-labelledby="shared-events-heading">
       <h2 id="shared-events-heading">Shared events, different rules</h2>
       <p className="muted">Contracts on the same event with a documented scenario where payouts differ.</p>
-      {rows?.length ? (
-        <ul className="opportunity-list">
-          {rows.map((row) => (
-            <li key={row.kalshi_id + ":" + row.polymarket_id}>
-              <h3 className="opportunity-name">{row.kalshi_title}</h3>
-              {row.polymarket_title !== row.kalshi_title && <p className="muted">{row.polymarket_title}</p>}
-              <p className="rule-scenario">{row.difference.scenario}</p>
-              <dl className="rule-comparison">
-                {[
-                  { label: "Kalshi", close: row.kalshi_close, book: row.kalshi_rulebook, payout: row.difference.kalshi_payout,
-                    cutoff: row.difference.kalshi_cutoff, inclusive: row.difference.kalshi_cutoff_inclusive },
-                  { label: polymarketLabel(row.polymarket_venue), url: row.polymarket_url, close: row.polymarket_close, book: row.polymarket_rulebook,
-                    payout: row.difference.polymarket_payout, cutoff: row.difference.polymarket_cutoff, inclusive: row.difference.polymarket_cutoff_inclusive },
-                ].map(({ label, url, close, book, payout, cutoff, inclusive }) => (
-                  <div key={label}>
-                    <dt>{url ? <a href={url}>{label}</a> : label}</dt>
-                    <dd>{payout}{payout === "Yes" || payout === "No" ? " pays $1" : ""}</dd>
-                    {cutoff && <dd className="quote-time">Rule deadline {inclusive ? "by" : "before"} <time dateTime={cutoff}>{ruleDate.format(new Date(cutoff))}</time></dd>}
-                    <dd className="quote-time">Trading closes <CloseTime value={close} /></dd>
-                    {book && <dd><a className="quote-time" href={book} aria-label={label + " governing rules"}>Governing rules</a></dd>}
-                  </div>
-                ))}
-              </dl>
-            </li>
+      {groups.length ? (
+        <div className="shared-event-groups">
+          {groups.map(({ id, title, pairs }) => (
+            <details key={id}>
+              <summary>
+                <span>{title}</span>
+                <span className="shared-event-count">{pairs.length} {pairs.length === 1 ? "pair" : "pairs"}</span>
+              </summary>
+              <ul className="opportunity-list">
+                {pairs.map((row) => <SharedEventPair key={row.kalshi_id + ":" + row.polymarket_id} row={row} />)}
+              </ul>
+            </details>
           ))}
-        </ul>
+        </div>
       ) : <div className="message">{loading ? "Loading shared events…" : rows ? "No shared events with documented rule differences in this window." : "Waiting for a snapshot."}</div>}
     </section>
+  );
+}
+
+function SharedEventPair({ row }) {
+  return (
+    <li>
+      <h3 className="opportunity-name">{row.kalshi_title}</h3>
+      {row.polymarket_title !== row.kalshi_title && <p className="muted">{row.polymarket_title}</p>}
+      <p className="rule-scenario">{row.difference.scenario}</p>
+      <dl className="rule-comparison">
+        {[
+          { label: "Kalshi", close: row.kalshi_close, book: row.kalshi_rulebook, payout: row.difference.kalshi_payout,
+            cutoff: row.difference.kalshi_cutoff, inclusive: row.difference.kalshi_cutoff_inclusive },
+          { label: polymarketLabel(row.polymarket_venue), url: row.polymarket_url, close: row.polymarket_close, book: row.polymarket_rulebook,
+            payout: row.difference.polymarket_payout, cutoff: row.difference.polymarket_cutoff, inclusive: row.difference.polymarket_cutoff_inclusive },
+        ].map(({ label, url, close, book, payout, cutoff, inclusive }) => (
+          <div key={label}>
+            <dt>{url ? <a href={url}>{label}</a> : label}</dt>
+            <dd>{payout}{payout === "Yes" || payout === "No" ? " pays $1" : ""}</dd>
+            {cutoff && <dd className="quote-time">Rule deadline {inclusive ? "by" : "before"} <time dateTime={cutoff}>{ruleDate.format(new Date(cutoff))}</time></dd>}
+            <dd className="quote-time">Trading closes <CloseTime value={close} /></dd>
+            {book && <dd><a className="quote-time" href={book} aria-label={label + " governing rules"}>Governing rules</a></dd>}
+          </div>
+        ))}
+      </dl>
+    </li>
   );
 }
 

@@ -111,6 +111,7 @@ def normalize_market(market, venue, now, window=SCAN_WINDOW):
             title = market.get("title") or market["question"]
             normalized = {
                 "id": slug, "venue": POLY_US, "title": title, "subtitle": "",
+                "event_title": market.get("question"),
                 "rules": market.get("description") or "", "secondary_rules": "",
                 "resolution": "", "tokens": tokens, "close_time": close,
                 "listed_at": market.get("createdAt") or market.get("startDate"),
@@ -149,6 +150,7 @@ def normalize_market(market, venue, now, window=SCAN_WINDOW):
             event = market.get("events") or []
             if isinstance(event, list) and len(event) == 1 and isinstance(event[0], dict):
                 normalized["market_event_id"] = event[0].get("id")
+                normalized["event_title"] = event[0].get("title")
         keys = ("id", "title", "event_id") if venue == "kalshi" else ("id", "title")
         if not all(isinstance(normalized[key], str) and normalized[key].strip() for key in keys):
             raise ValueError("Missing market ID or title")

@@ -45,8 +45,13 @@ artifact records the evidence. Add confirmed manual reviews to
 runs. A merge triggers a fresh pricing and dashboard run. The dashboard shows
 **Cancellation differences** separately for pairs whose only proven difference
 is how they pay out when the event is canceled. **Shared events, different
-rules** lists documented payout conflicts, such as different deadlines for
-the same appointment. These contracts are excluded from opportunity pricing.
+rules** groups documented payout conflicts by event and shows the contracts
+within each event. Discovery checks the eligible feeds using indexed settlement
+conditions, including exact dated candidates that bypass fuzzy-review limits.
+Pairs with different rules can appear in **Opportunities** when the minimum
+payout across all verified settlement outcomes exceeds both buy prices and fees.
+The card shows the rule difference, minimum payout, and minimum net profit.
+Incomplete payout evidence remains outside opportunity pricing.
 If discovery fails, the
 workflow can still publish game odds and manually approved opportunities.
 

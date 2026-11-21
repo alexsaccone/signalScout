@@ -59,7 +59,10 @@ class MatchingTest(unittest.TestCase):
         expected = {"A", international["id"]}
         with patch.multiple("src.Arbitrage.searcher", MAX_SUGGESTIONS=1, MAX_LEADS=1, MAX_POSTINGS=2):
             self.assertEqual({row["polymarket"]["id"] for row in review_candidates([left], markets)}, expected)
-            self.assertEqual({row["polymarket"]["id"] for row in review_leads([left], markets)}, expected)
+            self.assertEqual({row["polymarket"]["id"] for row in review_leads([left], markets)}, expected | {"B"})
+            fuzzy = [dict(market, rules=market["rules"].replace("at least 20 points", "exactly 20 points"))
+                     for market in markets]
+            self.assertEqual({row["polymarket"]["id"] for row in review_leads([left], fuzzy)}, expected)
 
     def test_reworded_titles_and_equivalent_terms_are_suggested_for_review(self):
         kalshi, poly = self.matching_contracts()

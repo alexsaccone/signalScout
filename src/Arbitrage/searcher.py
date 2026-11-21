@@ -238,13 +238,13 @@ def settlement_key(market):
     return normalize_condition(condition), remaining, declared_sources
 
 
-def review_candidates(kalshi, polymarket, key=settlement_key):
+def review_candidates(kalshi, polymarket, key=settlement_key, all_matches=False):
     by_settlement = defaultdict(lambda: defaultdict(list))
     for market in sorted(polymarket, key=lambda market: market["id"]):
         terms = key(market)
         if terms is not None:
             venue_matches = by_settlement[terms][market.get("venue")]
-            if len(venue_matches) < MAX_SUGGESTIONS:
+            if all_matches or len(venue_matches) < MAX_SUGGESTIONS:
                 venue_matches.append(market)
 
     candidates = []
@@ -296,7 +296,14 @@ def lead_terms(market):
     dates = set(re.findall(DATED, condition))
     words = frozenset(LEAD_WORD.findall(re.sub(DATED, "", condition).casefold())) - LEAD_STOP_WORDS
     if len(dates) == 1 and len(words) >= 3:
-        return dates.pop(), words
+        return dates.pop(), words, normalize_condition(condition)
+
+
+def stat_cutoff(condition):
+    match = STAT_THRESHOLD.match(condition)
+    if match and match[2] in {"at least", "more than"}:
+        player, comparison, count, _, _, unit = match.groups()
+        return (player, unit, condition[match.end():]), int(count) + (comparison == "more than")
 
 
 def rule_matches(pattern, text):
@@ -322,15 +329,19 @@ def cutoff_review_key(market):
 
 def review_leads(kalshi, polymarket):
     by_word = defaultdict(list)
+    by_condition = defaultdict(list)
     poly_terms = []
     venues = dict.fromkeys(market.get("venue") for market in polymarket)
     for market in polymarket:
         info = lead_terms(market)
         if not info:
             continue
-        day, words = info
+        day, words, condition = info
+        cutoff = stat_cutoff(condition)
         index = len(poly_terms)
-        poly_terms.append((market, words, lead_type(market['title'])))
+        kind = lead_type(market["title"])
+        by_condition[cutoff[0] if cutoff else condition.casefold()].append((market, kind))
+        poly_terms.append((market, words, kind))
         venue = market.get("venue")
         for word in words:
             posting = by_word[venue, day, word]
@@ -338,19 +349,28 @@ def review_leads(kalshi, polymarket):
                 posting.append(index)
 
     by_event = defaultdict(list)
+    exact = {}
     for left in kalshi:
         info = lead_terms(left)
         if not info:
             continue
-        day, words = info
+        day, words, condition = info
+        cutoff = stat_cutoff(condition)
+        left_type = lead_type(left["title"])
+        for right, right_type in by_condition.get(cutoff[0] if cutoff else condition.casefold(), ()):
+            if left_type and right_type and left_type != right_type:
+                continue
+            ids = left["id"], right["id"]
+            exact[ids] = {"event_date": day, "kalshi": market_terms(left), "polymarket": market_terms(right)}
         postings = (by_word.get((venue, day, word), ()) for venue in venues for word in words)
         overlaps = Counter(i for posting in postings if len(posting) <= MAX_POSTINGS for i in posting)
-        left_type = lead_type(left["title"])
         groups = set()
         for i, common in overlaps.items():
             if common < 3:
                 continue
             right, right_words, right_type = poly_terms[i]
+            if (left["id"], right["id"]) in exact:
+                continue
             if left_type and right_type and left_type != right_type:
                 continue
             score = len(words & right_words) / len(words | right_words)
@@ -387,7 +407,8 @@ def review_leads(kalshi, polymarket):
         unique[ids] = lead
         seen_events[group] += 1
         seen_venues[venue] += 1
-    return list(unique.values())
+    exact.update(unique)
+    return list(exact.values())
 
 
 NEXT_ROLE_RULES = (

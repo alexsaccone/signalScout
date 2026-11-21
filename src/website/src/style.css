@@ -44,6 +44,7 @@ h1 { font-size: 2.7rem; font-weight: 650; line-height: 1.12; letter-spacing: -.0
 .tag { display: inline-flex; width: fit-content; align-items: center; padding: 3px 8px; border-radius: 4px; font-size: .8rem; line-height: 1.4; font-weight: 650; }
 .tag.current { background: #253e64; color: #e0ecff; }
 .tag.warning { background: #fff0ca; color: #744716; }
+.tag.rule-variance { background: #e2ebfa; color: var(--navy); white-space: nowrap; }
 .workspace { padding: 33px 0 30px; min-height: 61vh; }
 .games { max-width: 900px; margin-inline: auto; }
 .market-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
@@ -90,6 +91,12 @@ time { font-variant-numeric: tabular-nums; }
 .opportunity-list { list-style: none; margin: 16px 0 0; padding: 0; }
 .opportunity-list li { border-top: 1px solid var(--line); padding: 14px 0; }
 .quote-heading { display: flex; justify-content: space-between; align-items: start; gap: 7px; }
+.quote-tags { display: flex; flex-wrap: wrap; justify-content: end; gap: 4px; }
+.shared-event-groups { margin-top: 16px; border-bottom: 1px solid var(--line); }
+.shared-event-groups details { border-top: 1px solid var(--line); }
+.shared-event-groups summary { cursor: pointer; min-height: 47px; padding: 12px 0; font-weight: 650; }
+.shared-event-groups .opportunity-list { margin-top: 0; }
+.shared-event-count { float: right; margin-left: 10px; color: var(--muted); font-size: .85rem; font-weight: 500; }
 .opportunity-name { font-size: 1rem; font-weight: 650; line-height: 1.28; }
 .legs { margin: 6px 0 13px; color: var(--muted); font-size: .82rem; }
 .quote-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 0 0 9px; }
