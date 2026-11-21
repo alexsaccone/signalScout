@@ -46,3 +46,13 @@ export function filterGames(games, query, sport) {
     [game.title, game.sport, ...game.outcomes.map((outcome) => outcome.name)]
       .some((value) => value.toLocaleLowerCase().includes(needle)));
 }
+
+export function groupSharedEvents(rows) {
+  const groups = new Map();
+  for (const row of rows ?? []) {
+    const id = row.event_id ?? row.kalshi_id;
+    if (!groups.has(id)) groups.set(id, { id, title: row.event_title ?? row.kalshi_title, pairs: [] });
+    groups.get(id).pairs.push(row);
+  }
+  return [...groups.values()];
+}

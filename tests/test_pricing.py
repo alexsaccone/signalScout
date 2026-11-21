@@ -62,3 +62,23 @@ class PricingTest(unittest.TestCase):
         self.assertEqual(row["estimated_fees"], Decimal(".23"))
         self.assertEqual(row["daily_roi_pct"], row["net_return_pct"] / 100)
         self.assertEqual(row["capital_until"], market["close_time"].isoformat())
+
+    def test_shared_pair_only_prices_positions_profitable_in_every_settlement_scenario(self):
+        market = dict(POLY, tokens={"yes": "20", "no": "10"})
+        proof = {"payout_scenarios": [("yes", "yes"), ("no", "no"), ("yes", "50-50")],
+                 "rule_difference": "Cancellation payout differs."}
+        with mock.patch("src.Arbitrage.pricing.kalshi_fee_rate", return_value=Decimal("0")), mock.patch(
+            "src.Arbitrage.pricing.polymarket_fee_rate", return_value=Decimal("0"),
+        ), mock.patch(
+            "src.Arbitrage.pricing.kalshi_quotes", return_value={"yes": quote(".3"), "no": quote(".3")},
+        ), mock.patch("src.Arbitrage.pricing.polymarket_quote", return_value=quote(".3")) as poly_quote:
+            row, = price_pairs([(KALSHI, market)], lambda: NOW, shared_rules={("K", "P"): proof})
+            self.assertEqual((row["kalshi_side"], row["polymarket_side"]), ("yes", "no"))
+            self.assertEqual(row["minimum_payout"], Decimal("10"))
+            self.assertEqual(row["estimated_net_profit"], Decimal("4"))
+            self.assertEqual(row["rule_difference"], proof["rule_difference"])
+            poly_quote.return_value = quote(".1")
+            rows = price_pairs([(KALSHI, market)], lambda: NOW, shared_rules={("K", "P"): proof})
+            riskier = next(item for item in rows if item["kalshi_side"] == "no")
+            self.assertEqual(riskier["minimum_payout"], Decimal("5"))
+            self.assertEqual(riskier["estimated_net_profit"], Decimal("1"))

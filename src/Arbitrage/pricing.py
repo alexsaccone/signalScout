@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN
 from email.utils import parsedate_to_datetime
+from itertools import product
 from urllib.parse import quote
 
 if __package__:
@@ -21,6 +22,7 @@ OUTPUT_FIELDS = (
     "kalshi_ask", "polymarket_ask", "max_contracts", "quote_at", "valid_until",
     "estimated_fees", "estimated_cost", "estimated_net_profit", "net_return_pct",
     "polymarket_venue", "closes_at", "capital_until", "daily_roi_pct",
+    "minimum_payout", "rule_difference",
 )
 
 
@@ -120,7 +122,8 @@ def polymarket_us_quotes(market, fetch):
     return quotes
 
 
-def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now):
+def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now,
+                minimum_per_pair=Decimal(1), rule_difference=None):
     if not (left and right and left.usable(now) and right.usable(now)):
         return None
     size = min(left.size, right.size).to_integral_value(rounding=ROUND_FLOOR)
@@ -137,7 +140,8 @@ def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now):
     else:
         poly_fee = poly_fee.quantize(Decimal(".00001"), rounding=ROUND_CEILING)
     cost = kalshi_cost + poly_base + poly_fee
-    profit = size - cost
+    minimum_payout = minimum_per_pair * size
+    profit = minimum_payout - cost
     if profit <= 0:
         return None
 
@@ -159,12 +163,32 @@ def opportunity(left, right, kalshi, poly, k_side, p_side, k_rate, p_rate, now):
         "estimated_cost": cost, "estimated_net_profit": profit, "net_return_pct": net_return,
         "polymarket_venue": poly.get("venue", "polymarket"), "closes_at": closes_at.isoformat(),
         "capital_until": capital_until.isoformat(), "daily_roi_pct": net_return / days,
+        "minimum_payout": minimum_payout, "rule_difference": rule_difference,
     }
 
 
-def price_pairs(pairs, clock, fetch=fetch_json):
+def minimum_payouts(scenarios):
+    """Compute the worst-case payout of each two-leg position from a complete proof."""
+    values = {"no": Decimal(0), "50-50": Decimal("0.5"), "yes": Decimal(1)}
+    if not scenarios or any(not isinstance(case, (list, tuple)) or len(case) != 2
+                            or any(not isinstance(side, str) or side not in values for side in case)
+                            for case in scenarios):
+        return {}
+    pairs = [(values[left], values[right]) for left, right in scenarios]
+    return {
+        (k_side, p_side): min((left if k_side == "yes" else 1 - left) +
+                              (right if p_side == "yes" else 1 - right) for left, right in pairs)
+        for k_side, p_side in product(("yes", "no"), repeat=2)
+    }
+
+
+def price_pairs(pairs, clock, fetch=fetch_json, shared_rules=None):
     opportunities = []
     for kalshi, poly in pairs:
+        proof = shared_rules.get((kalshi["id"], poly["id"])) if shared_rules else None
+        minimums = minimum_payouts(proof["payout_scenarios"]) if proof else dict.fromkeys(SIDES, Decimal(1))
+        if not any(minimums.values()):
+            continue
         try:
             k_rate = kalshi_fee_rate(kalshi, fetch)
             is_us = poly.get("venue") == POLY_US
@@ -177,15 +201,17 @@ def price_pairs(pairs, clock, fetch=fetch_json):
             if k_rate is None or p_rate is None or not k_rate.is_finite() or k_rate < 0:
                 continue
             quotes = kalshi_quotes(kalshi, fetch)
-            us_quotes = polymarket_us_quotes(poly, fetch) if is_us else {}
-            for k_side, p_side in SIDES:
-                if k_side not in quotes:
+            poly_quotes = polymarket_us_quotes(poly, fetch) if is_us else {}
+            for (k_side, p_side), minimum in minimums.items():
+                if not minimum or k_side not in quotes:
                     continue
-                right = us_quotes.get(p_side) if is_us else polymarket_quote(poly["tokens"][p_side], fetch)
+                if not is_us and p_side not in poly_quotes:
+                    poly_quotes[p_side] = polymarket_quote(poly["tokens"][p_side], fetch)
                 now = clock()
                 if now >= min(kalshi["close_time"], poly["close_time"]):
                     continue
-                result = opportunity(quotes[k_side], right, kalshi, poly, k_side, p_side, k_rate, p_rate, now)
+                result = opportunity(quotes[k_side], poly_quotes.get(p_side), kalshi, poly, k_side, p_side,
+                                     k_rate, p_rate, now, minimum, proof["rule_difference"] if proof else None)
                 if result is not None:
                     opportunities.append(result)
         except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError) as error:

@@ -65,14 +65,23 @@ def live_pairs(reviews, report, now):
         (row["pair"]["kalshi"]["id"], row["pair"]["polymarket"]["id"]): row
         for row in current_assessment_rows(report.get("cancellation_only", []), now)
     }
-    rejected = [row for row in report.get("different_rules", []) if row["pair"] in reviews]
-    blocked = [row["pair"] for row in current_assessment_rows(rejected, now)]
+    conflicts = report.get("different_rules", [])
+    blocked = [row["pair"] for row in conflicts + report.get("cancellation_only", []) if row["pair"] in reviews]
     reviews = [review for review in reviews if review not in blocked]
+    shared_rules = {ids: row for ids, row in differences.items() if "payout_scenarios" in row}
+    shared_rules.update({
+        (row["pair"]["kalshi"]["id"], row["pair"]["polymarket"]["id"]): row
+        for row in current_assessment_rows([row for row in conflicts if "payout_scenarios" in row], now)
+    })
     checked = refresh_reviewed_pairs(reviews + [row["pair"] for row in verified] +
-                                     [row["pair"] for row in differences.values()], now)
-    priceable, cancellation = [], []
+                                     [row["pair"] for row in differences.values()] +
+                                     [row["pair"] for row in shared_rules.values()], now)
+    priceable, cancellation, shared = [], [], []
     for left, right in checked:
-        difference = differences.get((left["id"], right["id"]))
+        ids = left["id"], right["id"]
+        difference = differences.get(ids)
+        if ids in shared_rules:
+            shared.append((left, right, shared_rules[ids]))
         if difference:
             cancellation.append({
                 "kalshi_id": left["id"], "polymarket_id": right["id"],
@@ -83,9 +92,9 @@ def live_pairs(reviews, report, now):
                 "closes_at": min(left["close_time"], right["close_time"]).isoformat(),
                 "rulebook": difference["evidence"]["kalshi_rulebook"],
             })
-        else:
+        elif ids not in shared_rules:
             priceable.append((left, right))
-    return priceable, cancellation
+    return priceable, cancellation, shared
 
 
 def matched_pair_rows(pairs):
@@ -108,6 +117,8 @@ def shared_event_rows(report):
         earliest, latest = sorted((left["close_time"], right["close_time"]))
         results.append({
             "kalshi_id": left["id"], "polymarket_id": right["id"],
+            "event_id": row.get("event_id", left["id"]),
+            "event_title": row.get("event_title", left["title"]),
             "kalshi_title": left["title"], "polymarket_title": right["title"],
             "polymarket_venue": right.get("venue", "polymarket"), "polymarket_url": right.get("url"),
             "kalshi_close": left["close_time"], "polymarket_close": right["close_time"],
@@ -136,11 +147,16 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         raise ScanError("Reviewed pairs must be a JSON array")
     games = live_games(now)
     report = json.loads(assessment_path.read_text(encoding="utf-8")) if assessment_path else {}
-    pairs, cancellation = live_pairs(reviews, report, now)
-    opportunities = price_pairs(pairs, lambda: datetime.now(timezone.utc))
+    pairs, cancellation, shared = live_pairs(reviews, report, now)
+    shared_rules = {(left["id"], right["id"]): row for left, right, row in shared}
+    opportunities = price_pairs(
+        pairs + [(left, right) for left, right, _ in shared],
+        lambda: datetime.now(timezone.utc), shared_rules=shared_rules,
+    )
     return {"source": "live", "generated_at": datetime.now(timezone.utc).isoformat(),
             "odds": games, "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs),
-            "cancellation_only": cancellation, "shared_events": shared_event_rows(report)}
+            "cancellation_only": cancellation, "shared_events": shared_event_rows(report),
+            "shared_pairs_price_checked": len(shared)}
 
 
 def main(argv=None):

@@ -11,7 +11,7 @@ from src.Arbitrage.api import GAMMA_URL, POLY_US
 from src.Arbitrage.dashboard import live_pairs, shared_event_rows
 from src.Arbitrage.searcher import market_terms, review_candidates, review_leads, verified_pairs
 from src.Arbitrage.settlement_documents import Rulebook, rule_policy, text_policy
-from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, RATING_BOOKS, assessment_report
+from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, NETFLIX_BOOKS, RATING_BOOKS, assessment_report
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
 BOOK = "https://assets.kalshi.com/contract_terms/EXAMPLE.pdf"
@@ -90,7 +90,7 @@ class SettlementVerificationTest(unittest.TestCase):
             self.assertEqual(row["evidence"]["polymarket_rulebook"], ROTC_BOOK)
             self.assertEqual(live_pairs([], report, NOW)[0], [(left, right)])
             catalog["ROTC"]["versions"]["2026-11-05"] = {"effective": "2026-11-12", "rule": "40.6"}
-            self.assertEqual(live_pairs([], report, NOW), ([], []))
+            self.assertEqual(live_pairs([], report, NOW), ([], [], []))
             row, = self.assess(left, right)["manual_review"]
             self.assertIn("product certification", row["reason"])
 
@@ -110,7 +110,7 @@ class SettlementVerificationTest(unittest.TestCase):
             self.assertEqual(fetch.call_args.args, (f"{GAMMA_URL}/market-clarifications", {"event_id": "200", "limit": 1}))
             self.assertEqual(live_pairs([], report, NOW)[0], [(left, right)])
             fetch.side_effect = lambda url, params: ([{}] if "event_id" in params else [], {})
-            self.assertEqual(live_pairs([], report, NOW), ([], []))
+            self.assertEqual(live_pairs([], report, NOW), ([], [], []))
             row, = self.assess(left, right)["manual_review"]
             self.assertIn("clarifications", row["reason"])
 
@@ -202,17 +202,17 @@ class SettlementVerificationTest(unittest.TestCase):
             return verified_pairs([left], [right, alternative], reviews)
 
         with patch("src.Arbitrage.dashboard.refresh_reviewed_pairs", side_effect=refresh):
-            pairs, differences = live_pairs([], report, NOW)
+            pairs, differences, _ = live_pairs([], report, NOW)
             self.assertEqual([(k["id"], p["id"]) for k, p in pairs], [(left["id"], right["id"])])
             self.assertEqual([row["polymarket_id"] for row in differences], [alternative["id"]])
 
             right["rules"] += "\nA changed payout clause."
-            pairs, differences = live_pairs([], report, NOW)
+            pairs, differences, _ = live_pairs([], report, NOW)
             self.assertEqual(pairs, [])
             self.assertEqual(len(differences), 1)
 
             digest.return_value = Rulebook("changed")
-            self.assertEqual(live_pairs([], report, NOW), ([], []))
+            self.assertEqual(live_pairs([], report, NOW), ([], [], []))
 
     @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
     def test_equivalent_full_documents_with_different_content_hashes(self, _):
@@ -233,7 +233,7 @@ class SettlementVerificationTest(unittest.TestCase):
                 self.assertEqual(live_pairs([], report, NOW)[0], [(left, right)])
                 documents[OTHER_BOOK] = pdf('The resolution source for this market is https://www.example.com/stats. '
                                             'Otherwise, this market will resolve to "No."')
-                self.assertEqual(live_pairs([], report, NOW), ([], []))
+                self.assertEqual(live_pairs([], report, NOW), ([], [], []))
             report = self.assess(left, right)
             self.assertEqual(len(report["manual_review"]), 1)
             self.assertFalse(report["verified"])
@@ -251,7 +251,7 @@ class SettlementVerificationTest(unittest.TestCase):
             self.assertFalse(report["cancellation_only"])
             with patch("src.Arbitrage.dashboard.refresh_reviewed_pairs",
                        side_effect=lambda reviews, now: verified_pairs([left], [right], reviews)):
-                self.assertEqual(live_pairs([row["pair"]], report, NOW), ([], []))
+                self.assertEqual(live_pairs([row["pair"]], report, NOW), ([], [], []))
 
         with patch("src.Arbitrage.settlement_verification.load_rulebook", return_value=Rulebook("changed")):
             report = self.assess(left, right)
@@ -278,6 +278,13 @@ class SettlementVerificationTest(unittest.TestCase):
             row, = report["cancellation_only"]
             self.assertEqual((row["kalshi_cancellation"], row["polymarket_cancellation"]), ("no", "50-50"))
             self.assertFalse(report["verified"])
+            self.assertEqual(row["payout_scenarios"], [("no", "no"), ("yes", "yes"), ("no", "50-50")])
+            with patch("src.Arbitrage.dashboard.refresh_reviewed_pairs",
+                       side_effect=lambda reviews, now: verified_pairs([left], [right], reviews)):
+                matched, cancellation, shared = live_pairs([], report, NOW)
+                self.assertEqual(matched, [])
+                self.assertEqual(len(cancellation), 1)
+                self.assertEqual(shared, [(left, right, row)])
 
     @patch("src.Arbitrage.settlement_verification.load_rulebook", return_value=Rulebook("same"))
     @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
@@ -311,3 +318,42 @@ class SettlementVerificationTest(unittest.TestCase):
         self.assertIsNotNone(last_minute.policy)
         self.assertEqual(last_minute.policy, midnight.policy)
         self.assertNotEqual(ambiguous.policy, midnight.policy)
+
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_stat_threshold_uses_same_fixture_and_source_with_complete_rules(self, _):
+        left, right = contracts(rulebook=OTHER_BOOK)
+        left["rules"] = left["rules"].replace("Boston Celtics wins", "Alex Example records more than 20 points")
+        right["rules"] = right["rules"].replace("Boston Celtics wins", "Alex Example records at least 20 points")
+        left["secondary_rules"] = left["secondary_rules"].replace(
+            "If the game is canceled, this market will resolve to No.\n", "")
+        right["rules"] = right["rules"].replace("If the game is cancelled, this market will resolve to No.\n", "")
+        book = pdf("Use https://www.nba.com/stats as the official source. Otherwise, this market will resolve to No.")
+        with patch("src.Arbitrage.settlement_verification.load_rulebook", return_value=book):
+            leads = review_leads([left], [right])
+            report = assessment_report([left], [right], [], leads, NOW)
+            row, = report["different_rules"]
+            self.assertEqual(row["payout_scenarios"], [("no", "no"), ("yes", "yes"), ("no", "yes")])
+            self.assertEqual(report["candidate_pairs_assessed"], 1)
+            self.assertEqual(row["event_id"], left["event_id"])
+            right["rules"] = right["rules"].replace("at 7 PM ET", "at 8 PM ET")
+            self.assertEqual(self.assess(left, right)["different_rules"], [])
+
+    @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
+    def test_chart_date_and_region_are_bound_before_comparing_rank(self, _):
+        left, right = contracts(rulebook=OTHER_BOOK)
+        left.update(id="KXNETFLIXRANKSHOWGLOBAL2-EVENT-SHOW",
+                    rules="If Example Show: Season 2 is #2 on the Netflix Top 10 Global Show on the chart "
+                          "published on Nov 24, 2026, then the market resolves to Yes.")
+        right.update(id="ccrc-ntflx-1-example", venue=POLY_US,
+                     rules="This market will settle to Yes if Example Show: Season 2 is #1 on the Netflix Global "
+                           "Top 10 Shows (English) chart published on November 24, 2026.\n"
+                           f"For full rules, see: {OTHER_BOOK}")
+        docs = {BOOK: Rulebook(NETFLIX_BOOKS[0]), OTHER_BOOK: Rulebook(NETFLIX_BOOKS[1])}
+        with patch("src.Arbitrage.settlement_verification.load_rulebook", side_effect=docs.get):
+            report = assessment_report([left], [right], [], [], NOW)
+            row, = shared_event_rows(report)
+            self.assertEqual(row["event_id"], "netflix-Global-Show-2026-11-24")
+            self.assertEqual(row["difference"]["scenario"], "Netflix ranks the named title #2 on that chart")
+            self.assertNotIn("payout_scenarios", report["different_rules"][0])
+            right["rules"] = right["rules"].replace("Global Top 10 Shows (English)", "Top 10 Shows in United States")
+            self.assertFalse(self.assess(left, right)["different_rules"])

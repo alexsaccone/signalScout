@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dashboardState, filterGames, loadSnapshot, validateSnapshot } from "../src/snapshot.js";
+import { dashboardState, filterGames, groupSharedEvents, loadSnapshot, validateSnapshot } from "../src/snapshot.js";
 
 const now = Date.parse("2026-11-19T00:00:00Z");
 const game = {
@@ -9,6 +9,16 @@ const game = {
 };
 const quote = { valid_until: "2026-11-19T00:01:00Z" };
 const snapshot = { source: "live", generated_at: new Date(now).toISOString(), odds: [game], opportunities: [quote] };
+
+test("several contracts for one event use a single shared-event group", () => {
+  const first = { event_id: "office", event_title: "Next press secretary", kalshi_id: "K-1" };
+  const movie = { event_id: "rating", event_title: "Film rating", kalshi_id: "K-2" };
+  const second = { ...first, kalshi_id: "K-3" };
+  assert.deepEqual(groupSharedEvents([first, movie, second]), [
+    { id: "office", title: "Next press secretary", pairs: [first, second] },
+    { id: "rating", title: "Film rating", pairs: [movie] },
+  ]);
+});
 
 test("shows populated data and expires individual quotes", () => {
   assert.deepEqual(dashboardState(validateSnapshot(snapshot), now).games, [game]);

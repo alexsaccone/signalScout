@@ -7,14 +7,14 @@ import requests
 
 if __package__:
     from .api import GAMMA_URL, KALSHI_URL, POLY_US, ScanError, fetch_json
-    from .searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
+    from .searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads, stat_cutoff
     from .settlement_documents import (
         KALSHI_BOOK, Rulebook, book_cancellation_difference, equivalent_rulebooks, filing_url,
         load_filing_catalog, load_rulebook, rule_policy,
     )
 else:
     from api import GAMMA_URL, KALSHI_URL, POLY_US, ScanError, fetch_json
-    from searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads
+    from searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads, stat_cutoff
     from settlement_documents import (
         KALSHI_BOOK, Rulebook, book_cancellation_difference, equivalent_rulebooks, filing_url,
         load_filing_catalog, load_rulebook, rule_policy,
@@ -62,6 +62,16 @@ RATING_CONDITION = re.compile(
 RATING_BOOKS = ("871c9d51b9e908ec3653bf71f6e1fb9f5f50ef7180cea9fc7c52a87753e08f2f",
                 "65f81b4acc4c9e10f88e86e7dc8d953c08758e556806a507f4e3784dc852b482")
 RATING_KALSHI_SECONDARY = "06615583780b946abfba8ff2de17f62c07d812c699740217dae5b08b1e061bea"
+NETFLIX_BOOKS = ("e053f0ff7aa757f872c436f1ac18aad410353443f6a847b4221a37c27162ec34",
+                 "5f4ed4e824174a5045df453670dbd2736e7cd008bc68c7bc6013a9d1a32d5b16")
+NETFLIX_RANK = (
+    re.compile(r"(.+?) is #([1-9][0-9]*) on the Netflix Top 10 (Global|US) (Movie|Show) "
+               r"on the chart published on (\d{4}-\d{2}-\d{2})"),
+    re.compile(r"(.+?) is #([1-9][0-9]*) on the Netflix (Global) Top 10 (Movie|Show)s \(English\) "
+               r"chart published on (\d{4}-\d{2}-\d{2})"),
+    re.compile(r"(.+?) is #([1-9][0-9]*) on the Netflix Top 10 (Movie|Show)s in (United States) "
+               r"chart published on (\d{4}-\d{2}-\d{2})"),
+)
 
 
 def rulebook_url(series):
@@ -208,6 +218,40 @@ def film_rating_key(market):
     return film.casefold(), int(threshold), cutoff
 
 
+def stat_payout_difference(k_terms, p_terms, kalshi_book, poly_book):
+    # Only the exact same fixed source and unconditional No default support this proof.
+    default = "Otherwise, this market will resolve to No."
+    if not (k_terms and p_terms and kalshi_book and poly_book):
+        return None
+    k_key, k_reference, k_cancel = k_terms
+    p_key, _, p_cancel = p_terms
+    if (k_reference or k_cancel or p_cancel or k_key[1:] != p_key[1:] or k_key[1] != default
+            or kalshi_book.policy != (default, k_key[2]) or poly_book.policy != kalshi_book.policy):
+        return None
+    lhs, rhs = stat_cutoff(k_key[0]), stat_cutoff(p_key[0])
+    if not lhs or not rhs or lhs[0] != rhs[0] or lhs[1] == rhs[1]:
+        return None
+    payouts = ("yes", "no") if lhs[1] < rhs[1] else ("no", "yes")
+    scenario = f"{lhs[0][0]} records exactly {min(lhs[1], rhs[1])} {lhs[0][1]}"
+    return {"scenario": scenario, "kalshi_payout": payouts[0].title(), "polymarket_payout": payouts[1].title()}, payouts
+
+
+def netflix_rank(market):
+    if not market["id"].startswith(("KXNETFLIXRANK", "ccrc-ntflx-")):
+        return None
+    parsed = published_condition(market)
+    if not parsed:
+        return None
+    condition, _ = parsed
+    for pattern in NETFLIX_RANK:
+        if match := pattern.fullmatch(condition):
+            entry, rank, region, kind, day = match.groups()
+            if kind == "United States":
+                region, kind = "US", region
+            return (entry.casefold(), region, kind, day), int(rank)
+    return None
+
+
 def assessment_report(kalshi, polymarket, candidates, leads, now=None):
     now = now or datetime.now(timezone.utc)
     report = {"generated_at": now.isoformat(),
@@ -225,11 +269,18 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         parsed = comparison(market["id"])
         return parsed[0] if parsed else None
 
-    matches = review_candidates(kalshi, comparable, key=key) if comparable else []
+    matches = review_candidates(kalshi, comparable, key=key, all_matches=True) if comparable else []
     rating_markets = [market for market in polymarket if market["id"].startswith("rotc-")]
-    rating_leads = review_candidates(kalshi, rating_markets, key=film_rating_key) if rating_markets else []
+    rating_leads = review_candidates(kalshi, rating_markets, key=film_rating_key, all_matches=True) if rating_markets else []
+    rank_markets = [market for market in polymarket if market["id"].startswith("ccrc-ntflx-")]
+
+    def chart_key(market):
+        rank = netflix_rank(market)
+        return rank[0] if rank else None
+
+    rank_leads = review_candidates(kalshi, rank_markets, key=chart_key, all_matches=True) if rank_markets else []
     seen = set()
-    for candidate in matches + rating_leads + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
+    for candidate in matches + rating_leads + rank_leads + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
         left, right = candidate["kalshi"], candidate["polymarket"]
         ids = left["id"], right["id"]
         if ids in seen:
@@ -257,7 +308,10 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         elif source == "inline_rules":
             evidence["polymarket_market_id"] = markets[right["id"]].get("market_id")
             evidence["polymarket_event_id"] = markets[right["id"]].get("market_event_id")
-        row = {"pair": {"kalshi": left, "polymarket": right}, "evidence": evidence}
+        event_title = markets[right["id"]].get("event_title")
+        row = {"pair": {"kalshi": left, "polymarket": right}, "evidence": evidence,
+               "event_id": markets[left["id"]]["event_id"],
+               "event_title": event_title.strip() if isinstance(event_title, str) and event_title.strip() else left["title"]}
         book_difference = book_cancellation_difference(kalshi_book, poly_book) if kalshi_book and poly_book else None
         cutoff_difference = role_deadline_difference(left, right) if kalshi_book and poly_book and poly_url else None
         if cutoff_difference:
@@ -274,6 +328,24 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
                 row["shared_event"] = True
                 report["different_rules"].append(row)
                 continue
+        if kalshi_book and poly_book and (kalshi_book.sha256, poly_book.sha256) == NETFLIX_BOOKS:
+            lhs, rhs = netflix_rank(left), netflix_rank(right)
+            if lhs and rhs and lhs[0] == rhs[0] and lhs[1] != rhs[1]:
+                _, region, kind, day = lhs[0]
+                row["event_id"] = f"netflix-{region}-{kind}-{day}"
+                row["event_title"] = f"Netflix {region} {kind.lower()} chart · {day}"
+                row["difference"] = {"scenario": f"Netflix ranks the named title #{lhs[1]} on that chart",
+                                     "kalshi_payout": "Yes", "polymarket_payout": "No"}
+                row["shared_event"] = True
+                report["different_rules"].append(row)
+                continue
+        if not left["resolution"] and (stat_difference := stat_payout_difference(k_terms, p_terms, kalshi_book, poly_book)):
+            row["difference"], payouts = stat_difference
+            row["shared_event"] = True
+            row["payout_scenarios"] = [("no", "no"), ("yes", "yes"), payouts]
+            row["rule_difference"] = "The venues use different thresholds for the same statistic."
+            report["different_rules"].append(row)
+            continue
         if not kalshi_book:
             reason = "The full Kalshi contract terms could not be retrieved."
         elif source == "inline_rules" and (difference := cancellation_mismatch(left, right, kalshi_book)):
@@ -306,6 +378,11 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
                     and not all(DISCRETIONARY.search(payout) for payout in (left_payout, right_payout))):
                 row["kalshi_cancellation"] = left_payout
                 row["polymarket_cancellation"] = right_payout
+                if (kalshi_book.policy and poly_book.policy
+                        and {left_payout, right_payout} <= {"yes", "no", "50-50"}):
+                    # Each state records the payout on YES. Outside cancellation the rules agree.
+                    row["payout_scenarios"] = [("no", "no"), ("yes", "yes"), (left_payout, right_payout)]
+                    row["rule_difference"] = "The venues pay differently if the event is canceled."
                 report["cancellation_only"].append(row)
                 continue
             if left_payout == right_payout and (not left_payout or not DISCRETIONARY.search(left_payout)):
@@ -316,6 +393,7 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         if "reason" in candidate:
             row["lead_reason"] = candidate["reason"]
         report["manual_review"].append(row)
+    report["candidate_pairs_assessed"] = len(seen)
     return report
 
 
@@ -333,7 +411,7 @@ def current_assessment_rows(rows, now=None):
         if not kalshi_book or kalshi_book.sha256 != fingerprint:
             continue
         source = evidence.get("polymarket_source")
-        if source == "inline_rules" and "difference" in row:
+        if source == "inline_rules" and "difference" in row and "payout_scenarios" not in row:
             yield row
             continue
         right = row["pair"]["polymarket"]
