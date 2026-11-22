@@ -85,7 +85,7 @@ jobs:
           key: settlement-ai-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
   build:
-    needs: settlement-review
+    needs: [settlement-review, ai-review]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -106,13 +106,23 @@ jobs:
         with:
           name: settlement-review
           path: settlement-review
+      - uses: actions/download-artifact@v4
+        if: needs.ai-review.result == 'success'
+        continue-on-error: true
+        with:
+          name: settlement-ai-review
+          path: settlement-ai-review
       - name: Build the market snapshot
+        shell: bash
         run: |
+          args=()
           if [[ -f settlement-review/assessment.json ]]; then
-            python -m src.Arbitrage.dashboard --settlement-assessment settlement-review/assessment.json
-          else
-            python -m src.Arbitrage.dashboard
+            args+=(--settlement-assessment settlement-review/assessment.json)
           fi
+          if [[ -f settlement-ai-review/review.json ]]; then
+            args+=(--ai-review settlement-ai-review/review.json)
+          fi
+          python -m src.Arbitrage.dashboard "${args[@]}"
       - run: npm ci && npm test && npm run build
         working-directory: src/website
       - uses: actions/upload-pages-artifact@v3

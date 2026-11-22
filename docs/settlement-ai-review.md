@@ -31,9 +31,10 @@ PDFs. Quote text is checked against the specified PDF page or the inline rules,
 with page 0 indicating inline rules. Scanned pages can require human verification
 when text extraction cannot support a quote.
 
-A human still needs to check the full terms and approve equivalent pairs through
-[`data/reviewed_pairs.json`](../data/reviewed_pairs.json). The dashboard builds
-from the deterministic settlement report while AI review runs in parallel.
+The Markets page shows suggestions and checked quotes under **AI-reviewed**.
+If the AI job fails, the dashboard can still publish from the deterministic
+settlement report. A human still needs to check the full terms and approve
+equivalent pairs through [`data/reviewed_pairs.json`](../data/reviewed_pairs.json).
 
 ## Quotas and cache
 

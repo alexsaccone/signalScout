@@ -12,6 +12,8 @@ from .ai_filter import atomic_write, fixture_quotes
 from .api import binary_values, fetch_json, GAMMA_URL, market_rows, normalize_markets, POLY_US, POLY_US_URL, PUBLIC_SLUG, ScanError, utc_timestamp
 from .pricing import price_pairs
 from .searcher import refresh_reviewed_pairs, verified_pairs
+from .settlement_ai_review import VERDICTS
+from .settlement_documents import OFFICIAL_RULEBOOK
 from .settlement_verification import current_assessment_rows
 
 ODDS_WINDOW = timedelta(days=3)
@@ -202,7 +204,38 @@ def shared_event_rows(report):
     return sorted(results, key=lambda row: (row["capital_until"], row["kalshi_title"]))
 
 
-def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
+def ai_review_rows(assessment, ai_report):
+    if not isinstance(ai_report, dict) or not assessment.get("generated_at") or ai_report.get("assessment_at") != assessment["generated_at"]:
+        return []
+    suggestions = {
+        (row["kalshi_id"], row["polymarket_id"]): row["review"]
+        for row in ai_report.get("reviews", [])
+        if row["status"] in {"reviewed", "cached"}
+    }
+    rows = []
+    for row in assessment.get("manual_review", []):
+        left, right = row["pair"]["kalshi"], row["pair"]["polymarket"]
+        review = suggestions.get((left["id"], right["id"]))
+        if not review or review.get("verdict") not in VERDICTS:
+            continue
+        earliest, latest = sorted((left["close_time"], right["close_time"]), key=utc_timestamp)
+        result = {
+            "kalshi_id": left["id"], "polymarket_id": right["id"],
+            "kalshi_title": left["title"], "polymarket_title": right["title"],
+            "polymarket_venue": right.get("venue", "polymarket"),
+            "closes_at": earliest, "capital_until": latest,
+            "verdict": review["verdict"], "summary": review["summary"], "quotes": review["quotes"],
+        }
+        for venue in ("kalshi", "polymarket"):
+            key = f"{venue}_rulebook"
+            url = row["evidence"].get(key)
+            if isinstance(url, str) and OFFICIAL_RULEBOOK.fullmatch(url):
+                result[key] = url
+        rows.append(result)
+    return sorted(rows, key=lambda row: utc_timestamp(row["closes_at"]))
+
+
+def build_snapshot(reviews_path, fixture_path=None, assessment_path=None, ai_review_path=None):
     if fixture_path:
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
         now = utc_timestamp(fixture["as_of"])
@@ -214,7 +247,7 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         add_event_links(opportunities + matches, {(left["id"], right["id"]): (left, right) for left, right in pairs})
         return {"source": "fixture", "generated_at": now.isoformat(), "odds": upcoming_odds(fixture["odds"], now),
                 "opportunities": opportunities, "matched_pairs": matches,
-                "cancellation_only": [], "shared_events": []}
+                "cancellation_only": [], "shared_events": [], "ai_reviews": []}
 
     now = datetime.now(timezone.utc)
     reviews = json.loads(reviews_path.read_text(encoding="utf-8"))
@@ -222,6 +255,12 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         raise ScanError("Reviewed pairs must be a JSON array")
     games = live_games(now)
     report = json.loads(assessment_path.read_text(encoding="utf-8")) if assessment_path else {}
+    ai_rows = []
+    if ai_review_path:
+        try:
+            ai_rows = ai_review_rows(report, json.loads(ai_review_path.read_text(encoding="utf-8")))
+        except (AttributeError, KeyError, OSError, TypeError, ValueError):
+            print("The AI-review report could not be published.", file=sys.stderr)
     pairs, cancellation, shared = live_pairs(reviews, report, now)
     shared_rules = {(left["id"], right["id"]): row for left, right, row in shared}
     opportunities = price_pairs(
@@ -229,9 +268,11 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         lambda: datetime.now(timezone.utc), shared_rules=shared_rules,
     )
     matches = matched_pair_rows(pairs)
+    matched_ids = {(row["kalshi_id"], row["polymarket_id"]) for row in matches}
+    ai_rows = [row for row in ai_rows if (row["kalshi_id"], row["polymarket_id"]) not in matched_ids]
     shared_rows = shared_event_rows(report)
     markets = {}
-    for row in report.get("different_rules", []) + report.get("cancellation_only", []):
+    for row in report.get("different_rules", []) + report.get("cancellation_only", []) + report.get("manual_review", []):
         left, right = row["pair"]["kalshi"], row["pair"]["polymarket"]
         markets[left["id"], right["id"]] = (
             {"event_id": row.get("kalshi_event_id")},
@@ -239,10 +280,11 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
                  event_title=row.get("polymarket_event_query") or row.get("event_title")),
         )
     markets.update({(left["id"], right["id"]): (left, right) for left, right in pairs})
-    add_event_links(opportunities + matches + cancellation + shared_rows, markets)
+    add_event_links(opportunities + matches + cancellation + shared_rows + ai_rows, markets)
     return {"source": "live", "generated_at": datetime.now(timezone.utc).isoformat(),
             "odds": games, "opportunities": opportunities, "matched_pairs": matches,
             "cancellation_only": cancellation, "shared_events": shared_rows,
+            "ai_reviews": ai_rows,
             "shared_pairs_price_checked": len(shared)}
 
 
@@ -250,11 +292,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Build the SignalScout dashboard snapshot.")
     parser.add_argument("--reviewed-pairs", type=Path, default=Path("data/reviewed_pairs.json"))
     parser.add_argument("--settlement-assessment", type=Path, help="Full settlement assessment from the current run.")
+    parser.add_argument("--ai-review", type=Path, help="Advisory review report from the same assessment.")
     parser.add_argument("--fixture", type=Path, help="Build a labeled offline demo snapshot.")
     parser.add_argument("--output", type=Path, default=Path("src/website/public/snapshot.json"))
     args = parser.parse_args(argv)
     try:
-        snapshot = build_snapshot(args.reviewed_pairs, args.fixture, args.settlement_assessment)
+        snapshot = build_snapshot(args.reviewed_pairs, args.fixture, args.settlement_assessment, args.ai_review)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(args.output, lambda output: json.dump(snapshot, output, default=str))
     except (ScanError, AttributeError, KeyError, TypeError, ValueError, OSError) as error:
@@ -263,7 +306,7 @@ def main(argv=None):
     print(f"Wrote {len(snapshot['odds'])} games and {len(snapshot['opportunities'])} opportunities.")
     print(f"Pricing checked {len(snapshot['matched_pairs'])} verified pairs and "
           f"{snapshot.get('shared_pairs_price_checked', 0)} shared pairs with an established payout floor. "
-          f"Published {len(snapshot['shared_events'])} shared pairs.")
+          f"Published {len(snapshot['shared_events'])} shared pairs and {len(snapshot['ai_reviews'])} AI-reviewed pairs.")
     return 0
 
 

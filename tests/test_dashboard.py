@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
-from src.Arbitrage.dashboard import build_snapshot, main, polymarket_us_event_urls, upcoming_odds
+from src.Arbitrage.dashboard import ai_review_rows, build_snapshot, main, polymarket_us_event_urls, upcoming_odds
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
 GAME = {
@@ -16,6 +16,33 @@ GAME = {
 
 
 class DashboardTest(unittest.TestCase):
+    def test_publishes_current_advisory_reviews_without_sending_them_to_pricing(self):
+        stamp = NOW.isoformat()
+        left = {"id": "KXTEST-EVENT-A", "title": "Kalshi contract", "close_time": "2026-12-01T20:00:00-05:00"}
+        right = {"id": "test-event-a", "title": "Polymarket contract", "close_time": "2026-12-02T00:00:00Z",
+                 "venue": "polymarket_us"}
+        candidate = {"pair": {"kalshi": left, "polymarket": right}, "evidence": {},
+                     "kalshi_event_id": "KXTEST-EVENT", "polymarket_event_url": "https://polymarket.us/event/test-event"}
+        assessment = {"generated_at": stamp, "manual_review": [candidate]}
+        suggestion = {"kalshi_id": left["id"], "polymarket_id": right["id"], "status": "cached",
+                      "review": {"verdict": "likely_equivalent", "summary": "Both use the same criteria.", "quotes": []}}
+        ai_report = {"assessment_at": stamp, "reviews": [suggestion]}
+        self.assertEqual(ai_review_rows(assessment, dict(ai_report, assessment_at="old")), [])
+        self.assertEqual(ai_review_rows(assessment, dict(ai_report, reviews=[dict(suggestion, status="unsupported_review")])), [])
+        with TemporaryDirectory() as folder, mock.patch("src.Arbitrage.dashboard.live_games", return_value=[]), mock.patch(
+            "src.Arbitrage.dashboard.refresh_reviewed_pairs", return_value=[]
+        ), mock.patch("src.Arbitrage.dashboard.price_pairs", return_value=[]) as price:
+            reviews, evidence, ai = (Path(folder) / name for name in ("reviews.json", "assessment.json", "ai.json"))
+            for path, value in ((reviews, []), (evidence, assessment), (ai, ai_report)):
+                path.write_text(json.dumps(value), encoding="utf-8")
+            snapshot = build_snapshot(reviews, assessment_path=evidence, ai_review_path=ai)
+        row, = snapshot["ai_reviews"]
+        self.assertEqual(row["closes_at"], right["close_time"])
+        self.assertEqual(row["polymarket_url"], candidate["polymarket_event_url"])
+        self.assertEqual(row["verdict"], "likely_equivalent")
+        self.assertEqual(snapshot["matched_pairs"], [])
+        self.assertEqual(price.call_args.args[0], [])
+
     def test_polymarket_us_link_requires_exact_event_membership(self):
         def fetch(url, params=None):
             if params:
