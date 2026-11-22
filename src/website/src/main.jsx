@@ -11,6 +11,7 @@ const marketTabs = [
   ["matched-pairs", "Matched pairs"],
   ["shared-events", "Shared events"],
   ["cancellation-rules", "Cancellation rules"],
+  ["ai-reviewed", "AI-reviewed"],
 ];
 const shortDate = new Intl.DateTimeFormat(undefined, {
   month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
@@ -220,6 +221,55 @@ function SharedEventPair({ row }) {
   );
 }
 
+const aiVerdicts = {
+  likely_equivalent: "Likely equivalent",
+  cancellation_only: "Cancellation difference only",
+  different_rules: "Different rules",
+  insufficient_evidence: "Insufficient evidence",
+};
+
+function AIReviewedPairs({ rows, loading }) {
+  return (
+    <section aria-labelledby="ai-reviewed-heading">
+      <h2 id="ai-reviewed-heading">AI-reviewed pairs</h2>
+      <p className="muted">Gemini’s rule comparisons. Each suggestion still needs human review before it can be used for pricing.</p>
+      {rows?.length ? (
+        <ul className="opportunity-list">
+          {rows.map((row) => (
+            <li key={row.kalshi_id + ":" + row.polymarket_id}>
+              <h3 className="opportunity-name">{aiVerdicts[row.verdict]}</h3>
+              <dl className="pair-venues">
+                <div><dt>Kalshi</dt><dd><EventLink url={row.kalshi_url}>{row.kalshi_title}</EventLink></dd></div>
+                <div><dt>{polymarketLabel(row.polymarket_venue)}</dt><dd><EventLink url={row.polymarket_url}>{row.polymarket_title}</EventLink></dd></div>
+              </dl>
+              <p className="rule-scenario">{row.summary}</p>
+              <p className="quote-time">First close <CloseTime value={row.closes_at} /></p>
+              {row.quotes.length > 0 && (
+                <details className="ai-evidence">
+                  <summary>Supporting quotes</summary>
+                  {row.quotes.map(({ venue, page, quote }, index) => {
+                    const label = venue === "kalshi" ? "Kalshi" : polymarketLabel(row.polymarket_venue);
+                    return (
+                      <blockquote key={index}>
+                        <p>{quote}</p>
+                        <p className="quote-time">
+                          {label} · {page ? <EventLink url={row[venue + "_rulebook"]}>Governing rules, page {page}</EventLink> : "Market rules"}
+                        </p>
+                      </blockquote>
+                    );
+                  })}
+                </details>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="message">{loading ? "Loading AI-reviewed pairs…" : rows ? "No AI-reviewed pairs in this closing window." : "Waiting for a snapshot."}</div>
+      )}
+    </section>
+  );
+}
+
 function marketTabFromHash() {
   const hash = window.location.hash.slice(1);
   return marketTabs.find(([id]) => id === hash)?.[0];
@@ -417,6 +467,7 @@ function App() {
             "matched-pairs": <MatchedPairs rows={state?.matchedPairs} loading={!state && loading} />,
             "shared-events": <SharedEvents rows={state?.sharedEvents} loading={!state && loading} />,
             "cancellation-rules": <CancellationDifferences rows={state?.cancellationOnly ?? []} />,
+            "ai-reviewed": <AIReviewedPairs rows={state?.aiReviews} loading={!state && loading} />,
           }}>
             <div className="market-control market-window">
               <label htmlFor="market-window">Cross-venue closing window</label>

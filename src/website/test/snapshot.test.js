@@ -10,6 +10,16 @@ const game = {
 const quote = { valid_until: "2026-11-19T00:01:00Z" };
 const snapshot = { source: "live", generated_at: new Date(now).toISOString(), odds: [game], opportunities: [quote] };
 
+test("AI reviews stay separate and follow the closing window", () => {
+  const pair = { closes_at: "2026-11-20T00:00:00Z", capital_until: "2026-11-24T00:00:00Z" };
+  const reviewed = validateSnapshot({ ...snapshot, ai_reviews: [pair] });
+  assert.deepEqual(dashboardState(reviewed, now, 4).aiReviews, [pair]);
+  assert.deepEqual(dashboardState(reviewed, now, 30).aiReviews, []);
+  assert.deepEqual(dashboardState(reviewed, now + 86400000).aiReviews, []);
+  assert.deepEqual(dashboardState(reviewed, now).matchedPairs, []);
+  assert.deepEqual(dashboardState(snapshot, now).aiReviews, []);
+});
+
 test("several contracts for one event use a single shared-event group", () => {
   const first = { event_id: "office", event_title: "Next press secretary", kalshi_id: "K-1" };
   const movie = { event_id: "rating", event_title: "Film rating", kalshi_id: "K-2" };

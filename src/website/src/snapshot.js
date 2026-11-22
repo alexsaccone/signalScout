@@ -7,6 +7,7 @@ export function validateSnapshot(snapshot) {
       !Array.isArray(snapshot.odds) || !Array.isArray(snapshot.opportunities) ||
       (snapshot.cancellation_only !== undefined && !Array.isArray(snapshot.cancellation_only)) ||
       (snapshot.shared_events !== undefined && !Array.isArray(snapshot.shared_events)) ||
+      (snapshot.ai_reviews !== undefined && !Array.isArray(snapshot.ai_reviews)) ||
       (snapshot.matched_pairs !== undefined && !Array.isArray(snapshot.matched_pairs))) {
     throw new Error("Invalid dashboard snapshot");
   }
@@ -37,7 +38,8 @@ export function dashboardState(snapshot, now, minimumDays = 0, sort = "daily_roi
   const cancellationOnly = (snapshot.cancellation_only ?? []).filter(open);
   const matchedPairs = (snapshot.matched_pairs ?? []).filter(open);
   const sharedEvents = (snapshot.shared_events ?? []).filter(open);
-  return { fixture, stale, games, opportunities, cancellationOnly, matchedPairs, sharedEvents };
+  const aiReviews = (snapshot.ai_reviews ?? []).filter(open);
+  return { fixture, stale, games, opportunities, cancellationOnly, matchedPairs, sharedEvents, aiReviews };
 }
 
 export function filterGames(games, query, sport) {
