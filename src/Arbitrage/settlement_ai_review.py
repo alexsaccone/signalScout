@@ -242,6 +242,12 @@ def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
         if queue is upgrades and any("review" not in result for _, result, *_ in pending):
             break
         for _, result, evidence, prompt, fingerprints in sorted(queue, key=lambda entry: entry[0]):
+            availability = {model: unavailable(model) for model in models}
+            if all(availability.values()):
+                next_retry = min((retry_at[model] for model in models if availability[model] == "model_cooldown"),
+                                 default=deadline)
+                if next_retry < deadline:
+                    sleep(max(0, next_retry - monotonic()))
             review_data = None
             failure = None
             for model in models:
