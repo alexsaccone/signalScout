@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
-from src.Arbitrage.dashboard import build_snapshot, main, upcoming_odds
+from src.Arbitrage.dashboard import build_snapshot, main, polymarket_us_event_urls, upcoming_odds
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
 GAME = {
@@ -16,6 +16,20 @@ GAME = {
 
 
 class DashboardTest(unittest.TestCase):
+    def test_polymarket_us_link_requires_exact_event_membership(self):
+        def fetch(url, params=None):
+            if params:
+                return {"events": [
+                    {"slug": "next-week", "markets": [{"slug": "rotc-next-week-gte80"}]},
+                    {"slug": "this-week", "markets": [{"slug": "rotc-this-week-gte80"}]},
+                ]}, {}
+            return {"event": {"slug": "different-event", "markets": [{"slug": "rotc-other-gte80"}]}}, {}
+
+        urls = polymarket_us_event_urls({
+            "rotc-this-week-gte80": "Same question", "rotc-this-week-gte90": "Same question",
+        }, fetch)
+        self.assertEqual(urls, {"rotc-this-week-gte80": "https://polymarket.us/event/this-week"})
+
     def test_odds_are_for_upcoming_moneyline_games_with_named_outcomes(self):
         games = upcoming_odds([
             dict(GAME, closed=True),
@@ -40,6 +54,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(len(snapshot["odds"]), 3)
         opportunity, = snapshot["opportunities"]
         self.assertEqual(opportunity["estimated_net_profit"], "0.73000")
+        self.assertEqual(opportunity["kalshi_url"], "https://kalshi.com/markets/k/k-event")
 
     def test_snapshot_lists_matched_pairs_when_pricing_finds_no_opportunity(self):
         fixture = Path(__file__).parent / "fixtures" / "scan.json"

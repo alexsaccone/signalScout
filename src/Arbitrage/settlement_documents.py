@@ -131,8 +131,9 @@ def filing_url(slug, listed_at, catalog, today):
         effective, filed, record = max((v for v in versions if v[0] <= today), key=lambda v: v[:2])
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
-    # A later amendment or a same-day boundary needs review of the applicable version.
-    if (not filed <= effective < listed <= today or record.get("rule") != "40.2"
+    # The April RDC amendment was checked for markets first listed after it took effect.
+    reviewed_amendment = code == "RDC" and filed == date(2026, 4, 6) and record.get("rule") == "40.6"
+    if (not filed <= effective < listed <= today or (record.get("rule") != "40.2" and not reviewed_amendment)
             or sum(day == effective for day, _, _ in versions) != 1):
         return None
     stamp = filed.isoformat().replace("-", ".")

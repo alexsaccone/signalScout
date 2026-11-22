@@ -1,4 +1,6 @@
 import argparse
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
@@ -7,12 +9,83 @@ import re
 import sys
 
 from .ai_filter import atomic_write, fixture_quotes
-from .api import binary_values, GAMMA_URL, market_rows, normalize_markets, ScanError, utc_timestamp
+from .api import binary_values, fetch_json, GAMMA_URL, market_rows, normalize_markets, POLY_US, POLY_US_URL, PUBLIC_SLUG, ScanError, utc_timestamp
 from .pricing import price_pairs
 from .searcher import refresh_reviewed_pairs, verified_pairs
 from .settlement_verification import current_assessment_rows
 
 ODDS_WINDOW = timedelta(days=3)
+
+
+def kalshi_event_url(ticker):
+    if isinstance(ticker, str) and re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9.]+)+", ticker):
+        ticker = ticker.lower()
+        return f"https://kalshi.com/markets/{ticker.split('-', 1)[0]}/{ticker}"
+
+
+def polymarket_us_event_urls(markets, fetch=fetch_json):
+    by_question = defaultdict(set)
+    for symbol, question in markets.items():
+        if isinstance(question, str) and question.strip():
+            by_question[question.strip()].add(symbol)
+
+    def links(events, symbols):
+        urls = {}
+        for event in events if isinstance(events, list) else []:
+            if not isinstance(event, dict):
+                continue
+            slug = event.get("slug")
+            markets = event.get("markets")
+            if isinstance(slug, str) and PUBLIC_SLUG.fullmatch(slug) and isinstance(markets, list):
+                for market in markets:
+                    symbol = market.get("slug") if isinstance(market, dict) else None
+                    if isinstance(symbol, str) and symbol in symbols:
+                        urls[symbol] = f"https://polymarket.us/event/{slug}"
+        return urls
+
+    def search(item):
+        question, symbols = item
+        try:
+            payload, _ = fetch(f"{POLY_US_URL}/v1/search", {"query": question, "limit": 10})
+        except ScanError:
+            return {}
+        return links(payload.get("events"), symbols) if isinstance(payload, dict) else {}
+
+    def lookup(item):
+        slug, symbols = item
+        try:
+            payload, _ = fetch(f"{POLY_US_URL}/v1/events/slug/{slug}")
+        except ScanError:
+            return {}
+        return links([payload.get("event")], symbols) if isinstance(payload, dict) else {}
+
+    urls = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for result in pool.map(search, by_question.items()):
+            urls.update(result)
+        by_hint = defaultdict(set)
+        for symbol in markets.keys() - urls.keys():
+            slug = symbol.partition("-")[2].rpartition("-")[0]
+            if PUBLIC_SLUG.fullmatch(slug):
+                by_hint[slug].add(symbol)
+        for result in pool.map(lookup, by_hint.items()):
+            urls.update(result)
+    return urls
+
+
+def add_event_links(rows, markets):
+    unresolved = {}
+    for row in rows:
+        kalshi, polymarket = markets[(row["kalshi_id"], row["polymarket_id"])]
+        row["kalshi_url"] = kalshi_event_url(kalshi.get("event_id"))
+        row["polymarket_url"] = polymarket.get("url")
+        if not row["polymarket_url"] and polymarket.get("venue") == POLY_US:
+            unresolved[polymarket["id"]] = polymarket.get("event_title")
+    if unresolved:
+        urls = polymarket_us_event_urls(unresolved)
+        for row in rows:
+            if not row["polymarket_url"]:
+                row["polymarket_url"] = urls.get(row["polymarket_id"])
 
 
 def upcoming_odds(rows, now):
@@ -137,8 +210,10 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         polymarket = normalize_markets(fixture["polymarket"], "polymarket", now)
         pairs = list(verified_pairs(kalshi, polymarket, fixture["reviewed_pairs"]))
         opportunities = price_pairs(pairs, lambda: now, fixture_quotes(fixture["quotes"]))
+        matches = matched_pair_rows(pairs)
+        add_event_links(opportunities + matches, {(left["id"], right["id"]): (left, right) for left, right in pairs})
         return {"source": "fixture", "generated_at": now.isoformat(), "odds": upcoming_odds(fixture["odds"], now),
-                "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs),
+                "opportunities": opportunities, "matched_pairs": matches,
                 "cancellation_only": [], "shared_events": []}
 
     now = datetime.now(timezone.utc)
@@ -153,9 +228,21 @@ def build_snapshot(reviews_path, fixture_path=None, assessment_path=None):
         pairs + [(left, right) for left, right, _ in shared],
         lambda: datetime.now(timezone.utc), shared_rules=shared_rules,
     )
+    matches = matched_pair_rows(pairs)
+    shared_rows = shared_event_rows(report)
+    markets = {}
+    for row in report.get("different_rules", []) + report.get("cancellation_only", []):
+        left, right = row["pair"]["kalshi"], row["pair"]["polymarket"]
+        markets[left["id"], right["id"]] = (
+            {"event_id": row.get("kalshi_event_id")},
+            dict(right, url=row.get("polymarket_event_url") or right.get("url"),
+                 event_title=row.get("polymarket_event_query") or row.get("event_title")),
+        )
+    markets.update({(left["id"], right["id"]): (left, right) for left, right in pairs})
+    add_event_links(opportunities + matches + cancellation + shared_rows, markets)
     return {"source": "live", "generated_at": datetime.now(timezone.utc).isoformat(),
-            "odds": games, "opportunities": opportunities, "matched_pairs": matched_pair_rows(pairs),
-            "cancellation_only": cancellation, "shared_events": shared_event_rows(report),
+            "odds": games, "opportunities": opportunities, "matched_pairs": matches,
+            "cancellation_only": cancellation, "shared_events": shared_rows,
             "shared_pairs_price_checked": len(shared)}
 
 
@@ -174,6 +261,9 @@ def main(argv=None):
         print(f"Dashboard refresh failed: {error}", file=sys.stderr)
         return 1
     print(f"Wrote {len(snapshot['odds'])} games and {len(snapshot['opportunities'])} opportunities.")
+    print(f"Pricing checked {len(snapshot['matched_pairs'])} verified pairs and "
+          f"{snapshot.get('shared_pairs_price_checked', 0)} shared pairs with an established payout floor. "
+          f"Published {len(snapshot['shared_events'])} shared pairs.")
     return 0
 
 

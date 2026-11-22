@@ -92,7 +92,8 @@ def scan(args):
             result = price_pairs(pairs, lambda: datetime.now(timezone.utc))
 
     candidates = review_candidates(kalshi, poly) if args.review_candidates or args.settlement_assessment else []
-    leads = review_leads(kalshi, poly) if args.review_leads or args.settlement_assessment else []
+    lead_counts = {}
+    leads = review_leads(kalshi, poly, lead_counts) if args.review_leads or args.settlement_assessment else []
     if args.review_candidates:
         atomic_write(args.review_candidates, lambda output: json.dump(candidates, output, indent=2))
         print(f"Wrote {len(candidates)} review candidates to {args.review_candidates}")
@@ -102,6 +103,13 @@ def scan(args):
         print(f"Wrote {len(leads)} unverified review leads to {args.review_leads}")
     if args.settlement_assessment:
         assessment = assessment_report(kalshi, poly, candidates, leads)
+        assessment["rule_text_discovery"] = lead_counts
+        print(f"Rule-text search indexed {lead_counts['kalshi_indexed']} Kalshi and "
+              f"{lead_counts['polymarket_indexed']} Polymarket markets with a usable dated condition. "
+              f"It kept {lead_counts['exact_condition_leads']} exact-condition or statistic leads and "
+              f"{lead_counts['fuzzy_leads']} additional fuzzy leads.")
+        print(f"Assessed {assessment['candidate_pairs_assessed']} distinct candidates, including "
+              f"{assessment['structured_event_candidates']} from weather and Fed event identities")
         atomic_write(args.settlement_assessment, lambda output: json.dump(assessment, output, indent=2))
         print(f"Settlement assessment: {len(assessment['verified'])} verified, "
               f"{len(assessment['cancellation_only'])} cancellation-only, "

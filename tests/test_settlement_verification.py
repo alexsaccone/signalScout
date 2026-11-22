@@ -11,6 +11,7 @@ from src.Arbitrage.api import GAMMA_URL, POLY_US
 from src.Arbitrage.dashboard import live_pairs, shared_event_rows
 from src.Arbitrage.searcher import market_terms, review_candidates, review_leads, verified_pairs
 from src.Arbitrage.settlement_documents import Rulebook, rule_policy, text_policy
+from src.Arbitrage.settlement_events import FED_BOOKS, WEATHER_BOOKS
 from src.Arbitrage.settlement_verification import FAIR_PRICE_CANCELLATION, NETFLIX_BOOKS, RATING_BOOKS, assessment_report
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
@@ -70,6 +71,58 @@ class SettlementVerificationTest(unittest.TestCase):
     def assess(self, left, right):
         lead = {"kalshi": market_terms(left), "polymarket": market_terms(right)}
         return assessment_report([left], [right], [], [lead], NOW)
+
+    def test_discovers_weather_question_by_station_and_date(self):
+        left, right = contracts()
+        left.update(
+            id="KXHIGHNY-26NOV20-B61.5", event_id="KXHIGHNY-26NOV20",
+            rules="If the maximum temperature recorded at New York City (CLINYC) for Nov 20, 2026, "
+                  "is between 61-62° fahrenheit according to The Weather Company, then the market resolves to Yes.",
+        )
+        right.update(
+            id="tc-temp-nychigh-2026-11-20-gte61lt62f", venue=POLY_US, listed_at="2026-11-18T10:30:11Z",
+            rules="Will the highest temperature recorded at Central Park (KNYC) in New York City for "
+                  "2026-11-20 as reported by the National Weather Service's Climatological Report (Daily) "
+                  "be between 61F and 62F? Outcome verified from NWS Climatological Report.",
+        )
+        other = dict(right, id="tc-temp-jfkhigh-2026-11-20-gte61lt62f",
+                     rules=right["rules"].replace("KNYC", "KJFK"))
+        catalog = {"TC": {"versions": {"2026-04-03": {"effective": "2026-04-07", "rule": "40.2"}}}}
+        with patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK), patch(
+            "src.Arbitrage.settlement_verification.load_filing_catalog", return_value=catalog,
+        ), patch("src.Arbitrage.settlement_verification.load_rulebook",
+                 side_effect=lambda url: Rulebook(WEATHER_BOOKS[url != BOOK])):
+            self.assertEqual(review_leads([left], [right]), [])
+            report = assessment_report([left], [right, other], [], [], NOW)
+        self.assertEqual(report["candidate_pairs_assessed"], 1)
+        row, = report["different_rules"]
+        self.assertIn("The Weather Company reports 61°F and the NWS reports 60°F", row["difference"]["scenario"])
+        self.assertNotIn("payout_scenarios", row)
+        self.assertEqual(report["verified"], [])
+
+    def test_matches_fed_larger_bucket_with_stripped_comparison_character(self):
+        left, right = contracts()
+        left.update(
+            id="KXFEDDECISION-26DEC-H26", event_id="KXFEDDECISION-26DEC", subtitle="Hike >25bps",
+            rules="If the Federal Reserve does a Hike of   25bps on December 09, 2026, then the market resolves to Yes.",
+        )
+        right.update(
+            id="rdc-usfed-fomc-2026-12-09-hike50", venue=POLY_US, listed_at="2026-09-22T18:11:22Z",
+            rules="This market will settle to Yes if the Federal Reserve increases the upper bound of the target "
+                  "federal funds rate by 50 basis points or more at the December 2026 Federal Open Market "
+                  "Committee (FOMC) meeting, currently scheduled for December 8-9. Outcome sourced from the Federal Reserve.",
+        )
+        catalog = {"RDC": {"versions": {"2026-04-06": {"effective": "2026-04-20", "rule": "40.6"}}}}
+        with patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK), patch(
+            "src.Arbitrage.settlement_verification.load_filing_catalog", return_value=catalog,
+        ), patch("src.Arbitrage.settlement_verification.load_rulebook",
+                 side_effect=lambda url: Rulebook(FED_BOOKS[url != BOOK])):
+            self.assertEqual(review_leads([left], [right]), [])
+            report = assessment_report([left], [right], [], [], NOW)
+        row, = report["different_rules"]
+        self.assertEqual(row["difference"], {"scenario": "The Fed raises rates by 30 basis points",
+                                             "kalshi_payout": "Yes", "polymarket_payout": "No"})
+        self.assertNotIn("payout_scenarios", row)
 
     @patch("src.Arbitrage.settlement_verification.rulebook_url", return_value=BOOK)
     def test_uses_unlinked_us_filing_and_invalidates_if_a_later_amendment_takes_effect(self, _):
