@@ -1,13 +1,11 @@
 # AI review of settlement pairs
 
 **Publish dashboard** sends unresolved pairs to Gemini 4 Hydrogen after
-discovery. Gemini accepts both official PDFs and the inline market rules in one
-request. Google lists standard input and output as free within each project's
-quota. Groq's free GPT-OSS 120B tier advertises fixed quotas and structured text
-output. Gemini can also read the layout of the source PDFs.
+discovery. When Hydrogen cannot produce a usable review, the workflow tries
+Gemini 3.6 Flash. Both models accept the governing PDFs and inline market rules.
+Google lists standard input and output as free within each project's quota.
 [Gemini pricing](https://aistudio.google.com/docs/pricing#gemini-4-hydrogen) ·
 [Gemini document processing](https://aistudio.google.com/docs/document-processing)
-· [Groq limits](https://console.groq.com/docs/rate-limits)
 
 ## Enable the scheduled review
 
@@ -22,8 +20,8 @@ output. Gemini can also read the layout of the source PDFs.
 
 ## Read the results
 
-`review.json` records each manual-review pair, its source PDFs and hashes, and
-the status of the AI review. Reviews can suggest likely equivalence,
+`review.json` records each manual-review pair, its source PDFs and hashes,
+review status, and the model behind the selected verdict. Reviews can suggest likely equivalence,
 cancellation-only differences, other settlement differences, or insufficient
 evidence. Each substantive suggestion needs quotes from both venues. Likely
 equivalence and cancellation-only suggestions need citations from both governing
@@ -31,19 +29,24 @@ PDFs. Quote text is checked against the specified PDF page or the inline rules,
 with page 0 indicating inline rules. Scanned pages can require human verification
 when text extraction cannot support a quote.
 
-The Markets page shows suggestions and checked quotes under **AI-reviewed**.
+The Markets page shows the model, suggestion and checked quotes under **AI-reviewed**.
 If the AI job fails, the dashboard can still publish from the deterministic
 settlement report. A human still needs to check the full terms and approve
 equivalent pairs through [`data/reviewed_pairs.json`](../data/reviewed_pairs.json).
 
 ## Quotas and cache
 
-The job makes up to 30 new requests per run and stops on a quota response.
-Unreviewed pairs carry forward when rediscovered. The GitHub Actions cache reuses
-validated responses by model, prompt, exact market terms, and document hashes.
-Pairs with no previous attempt receive priority over failed attempts. Missing
-credentials and provider errors appear in the artifact. Google's actual free
-quota is project-specific, so the number of new pairs reviewed per day can vary.
+The job makes up to 30 total requests per run. Quota and temporary outages are
+handled for each model. Pairs with no previous attempt receive priority over
+failed attempts. Once every pair in the current manual-review queue has an AI
+result, remaining capacity goes to Hydrogen rechecks of earlier Flash reviews.
+A successful Hydrogen recheck becomes the selected verdict. Both models'
+validated results stay in the cache under separate fingerprints.
+
+Cached results can be reused while the prompt, market terms and document hashes
+match. Unreviewed pairs carry forward when rediscovered. The artifact records
+requests and selected results by model. Google's free quota is project-specific,
+so the number of new pairs reviewed per day can vary.
 [Gemini API rate limits](https://aistudio.google.com/docs/rate-limits)
 
 The request sends public venue rules only and disables interaction storage.

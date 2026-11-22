@@ -208,15 +208,16 @@ def ai_review_rows(assessment, ai_report):
     if not isinstance(ai_report, dict) or not assessment.get("generated_at") or ai_report.get("assessment_at") != assessment["generated_at"]:
         return []
     suggestions = {
-        (row["kalshi_id"], row["polymarket_id"]): row["review"]
+        (row["kalshi_id"], row["polymarket_id"]): row
         for row in ai_report.get("reviews", [])
         if row["status"] in {"reviewed", "cached"}
     }
     rows = []
     for row in assessment.get("manual_review", []):
         left, right = row["pair"]["kalshi"], row["pair"]["polymarket"]
-        review = suggestions.get((left["id"], right["id"]))
-        if not review or review.get("verdict") not in VERDICTS:
+        suggestion = suggestions.get((left["id"], right["id"]), {})
+        review = suggestion.get("review", {})
+        if review.get("verdict") not in VERDICTS:
             continue
         earliest, latest = sorted((left["close_time"], right["close_time"]), key=utc_timestamp)
         result = {
@@ -225,6 +226,7 @@ def ai_review_rows(assessment, ai_report):
             "polymarket_venue": right.get("venue", "polymarket"),
             "closes_at": earliest, "capital_until": latest,
             "verdict": review["verdict"], "summary": review["summary"], "quotes": review["quotes"],
+            "review_model": suggestion.get("review_model") or ai_report.get("model"),
         }
         for venue in ("kalshi", "polymarket"):
             key = f"{venue}_rulebook"
