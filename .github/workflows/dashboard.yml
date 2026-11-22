@@ -44,6 +44,46 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  ai-review:
+    needs: settlement-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: settlement-review
+          path: settlement-review
+      - uses: actions/cache/restore@v4
+        with:
+          path: .settlement-ai/cache.json
+          key: settlement-ai-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: settlement-ai-v1-
+      - name: Review unresolved settlement pairs
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        shell: bash
+        run: |
+          mkdir -p .settlement-ai
+          python -m src.Arbitrage.settlement_ai_review --assessment settlement-review/assessment.json --cache .settlement-ai/cache.json --output .settlement-ai/review.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: settlement-ai-review
+          path: .settlement-ai/review.json
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: true
+      - uses: actions/cache/save@v4
+        if: hashFiles('.settlement-ai/cache.json') != ''
+        with:
+          path: .settlement-ai/cache.json
+          key: settlement-ai-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
   build:
     needs: settlement-review
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
