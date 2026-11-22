@@ -99,13 +99,18 @@ def download_rules(url):
     return body
 
 
-def load_rulebook(url):
+def rulebook_body(url):
     if not isinstance(url, str) or not OFFICIAL_RULEBOOK.fullmatch(url):
         return None
     body = download_rules(url)
     if not body or not body.startswith(b"%PDF-") or not body.rstrip().endswith(b"%%EOF"):
         return None
-    return Rulebook(sha256(body).hexdigest(), text_policy(body))
+    return body
+
+
+def load_rulebook(url):
+    if body := rulebook_body(url):
+        return Rulebook(sha256(body).hexdigest(), text_policy(body))
 
 
 def load_filing_catalog():
