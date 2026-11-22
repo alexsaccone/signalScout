@@ -24,6 +24,7 @@ MODEL = "gemini-4-hydrogen"
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
 REVISION = "2026-05-20"
 RUN_LIMIT = 30
+MAX_CONSECUTIVE_API_FAILURES = 3
 VENUES = ("kalshi", "polymarket")
 VERDICTS = ("likely_equivalent", "cancellation_only", "different_rules", "insufficient_evidence")
 NEEDS_FULL_TERMS = {"likely_equivalent", "cancellation_only"}
@@ -125,7 +126,7 @@ def review_with_gemini(key, parts):
             "response_format": {"type": "text", "mime_type": "application/json", "schema": SCHEMA},
         },
         allow_redirects=False,
-        timeout=(5, 35),
+        timeout=(5, 90),
     )
     if response.status_code != 200:
         return None, ("quota_exhausted" if response.status_code == 429 else f"api_http_{response.status_code}")
@@ -145,6 +146,7 @@ def review_with_gemini(key, parts):
 def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
     output, pending = [], []
     attempts = 0
+    consecutive_failures = 0
     stopped = None if key else "missing_api_key"
     deadline = monotonic() + 360
     for row in assessment["manual_review"]:
@@ -196,11 +198,15 @@ def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
         cache[fingerprint] = {"attempted_at": time()}
         try:
             review, failure = review_with_gemini(key, parts)
+        except requests.Timeout:
+            review, failure = None, "api_timeout"
         except requests.RequestException:
             review, failure = None, "api_unavailable"
+        temporary = failure and (failure in {"api_timeout", "api_unavailable"} or failure.startswith("api_http_5"))
+        consecutive_failures = consecutive_failures + 1 if temporary else 0
         if failure:
             result["status"] = failure
-            if failure != "invalid_response":
+            if consecutive_failures >= MAX_CONSECUTIVE_API_FAILURES or (not temporary and failure != "invalid_response"):
                 stopped = failure
         elif valid_review(review, sources):
             cache[fingerprint]["review"] = review

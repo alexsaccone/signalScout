@@ -3,6 +3,8 @@ import json
 import unittest
 from unittest.mock import patch
 
+import requests
+
 from src.Arbitrage.settlement_ai_review import review_queue, review_with_gemini, valid_review
 
 
@@ -78,6 +80,22 @@ class SettlementAIReviewTest(unittest.TestCase):
         review_queue(report, cache, "test-key", pause=0)
         self.assertEqual(gemini.call_count, 2)
         self.assertIn("next-pair", gemini.call_args.args[1][0]["text"])
+
+    @patch("src.Arbitrage.settlement_ai_review.document", return_value=("PDF", (KALSHI_QUOTE,)))
+    @patch("src.Arbitrage.settlement_ai_review.review_with_gemini")
+    def test_timeout_leaves_its_pair_pending_and_continues_review(self, gemini, _):
+        report = assessment()
+        other = deepcopy(report["manual_review"][0])
+        other["pair"]["polymarket"]["id"] = "next-pair"
+        report["manual_review"].append(other)
+        gemini.side_effect = [requests.ReadTimeout(), (DIFFERENCE, None)]
+        cache = {}
+
+        result = review_queue(report, cache, "test-key", pause=0)
+
+        self.assertEqual(result["api_attempts"], 2)
+        self.assertEqual(result["counts"], {"api_timeout": 1, "reviewed": 1})
+        self.assertEqual(sum("review" in entry for entry in cache.values()), 1)
 
     @patch("src.Arbitrage.settlement_ai_review.requests.post")
     def test_gemini_request_and_parse_completed_response(self, post):
