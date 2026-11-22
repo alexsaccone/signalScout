@@ -327,7 +327,7 @@ def cutoff_review_key(market):
         return settlement_key(dict(market, **fields))
 
 
-def review_leads(kalshi, polymarket):
+def review_leads(kalshi, polymarket, counts=None):
     by_word = defaultdict(list)
     by_condition = defaultdict(list)
     poly_terms = []
@@ -350,10 +350,12 @@ def review_leads(kalshi, polymarket):
 
     by_event = defaultdict(list)
     exact = {}
+    indexed_kalshi = 0
     for left in kalshi:
         info = lead_terms(left)
         if not info:
             continue
+        indexed_kalshi += 1
         day, words, condition = info
         cutoff = stat_cutoff(condition)
         left_type = lead_type(left["title"])
@@ -407,6 +409,9 @@ def review_leads(kalshi, polymarket):
         unique[ids] = lead
         seen_events[group] += 1
         seen_venues[venue] += 1
+    if counts is not None:
+        counts.update(kalshi_indexed=indexed_kalshi, polymarket_indexed=len(poly_terms),
+                      exact_condition_leads=len(exact), fuzzy_leads=len(unique.keys() - exact.keys()))
     exact.update(unique)
     return list(exact.values())
 

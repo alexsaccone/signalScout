@@ -7,6 +7,7 @@ import requests
 
 if __package__:
     from .api import GAMMA_URL, KALSHI_URL, POLY_US, ScanError, fetch_json
+    from .settlement_events import event_difference, event_leads
     from .searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads, stat_cutoff
     from .settlement_documents import (
         KALSHI_BOOK, Rulebook, book_cancellation_difference, equivalent_rulebooks, filing_url,
@@ -14,6 +15,7 @@ if __package__:
     )
 else:
     from api import GAMMA_URL, KALSHI_URL, POLY_US, ScanError, fetch_json
+    from settlement_events import event_difference, event_leads
     from searcher import CONTRACT_REFERENCE, next_role, published_condition, review_candidates, rule_matches, same_scheduled_fixture, settlement_key, shared_role_leads, stat_cutoff
     from settlement_documents import (
         KALSHI_BOOK, Rulebook, book_cancellation_difference, equivalent_rulebooks, filing_url,
@@ -279,8 +281,9 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         return rank[0] if rank else None
 
     rank_leads = review_candidates(kalshi, rank_markets, key=chart_key, all_matches=True) if rank_markets else []
+    structured_leads = list(event_leads(kalshi, polymarket))
     seen = set()
-    for candidate in matches + rating_leads + rank_leads + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
+    for candidate in structured_leads + matches + rating_leads + rank_leads + list(shared_role_leads(kalshi, polymarket)) + candidates + leads:
         left, right = candidate["kalshi"], candidate["polymarket"]
         ids = left["id"], right["id"]
         if ids in seen:
@@ -311,7 +314,16 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
         event_title = markets[right["id"]].get("event_title")
         row = {"pair": {"kalshi": left, "polymarket": right}, "evidence": evidence,
                "event_id": markets[left["id"]]["event_id"],
+               "kalshi_event_id": markets[left["id"]]["event_id"],
+               "polymarket_event_query": event_title,
+               "polymarket_event_url": markets[right["id"]].get("url"),
                "event_title": event_title.strip() if isinstance(event_title, str) and event_title.strip() else left["title"]}
+        if difference := event_difference(candidate.get("event_terms"), kalshi_book, poly_book):
+            scenario, kalshi_payout, polymarket_payout = difference
+            row["difference"] = {"scenario": scenario, "kalshi_payout": kalshi_payout, "polymarket_payout": polymarket_payout}
+            row["shared_event"] = True
+            report["different_rules"].append(row)
+            continue
         book_difference = book_cancellation_difference(kalshi_book, poly_book) if kalshi_book and poly_book else None
         cutoff_difference = role_deadline_difference(left, right) if kalshi_book and poly_book and poly_url else None
         if cutoff_difference:
@@ -394,6 +406,7 @@ def assessment_report(kalshi, polymarket, candidates, leads, now=None):
             row["lead_reason"] = candidate["reason"]
         report["manual_review"].append(row)
     report["candidate_pairs_assessed"] = len(seen)
+    report["structured_event_candidates"] = len(structured_leads)
     return report
 
 

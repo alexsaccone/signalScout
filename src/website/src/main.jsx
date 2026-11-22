@@ -36,6 +36,10 @@ function polymarketLabel(venue) {
   return venue === "polymarket_us" ? "Polymarket US" : "Polymarket International";
 }
 
+function EventLink({ url, children }) {
+  return url ? <a href={url}>{children}</a> : children;
+}
+
 function CloseTime({ value }) {
   return <time dateTime={value}>{closeDate.format(new Date(value))}</time>;
 }
@@ -90,7 +94,10 @@ function Opportunities({ rows, sort, setSort }) {
                 </div>
               </div>
               {row.rule_difference && <p className="muted">{row.polymarket_name}</p>}
-              <p className="legs">Kalshi {row.kalshi_side.toUpperCase()} · {polymarketLabel(row.polymarket_venue)} {row.polymarket_side.toUpperCase()}</p>
+              <p className="legs">
+                <EventLink url={row.kalshi_url}>Kalshi</EventLink> {row.kalshi_side.toUpperCase()} ·{" "}
+                <EventLink url={row.polymarket_url}>{polymarketLabel(row.polymarket_venue)}</EventLink> {row.polymarket_side.toUpperCase()}
+              </p>
               <dl className="quote-stats">
                 {row.daily_roi_pct != null && <div><dt>Daily ROI</dt><dd>{roi.format(Number(row.daily_roi_pct) / 100)}</dd></div>}
                 <div><dt>Total ROI</dt><dd>{roi.format(Number(row.net_return_pct) / 100)}</dd></div>
@@ -119,8 +126,8 @@ function MatchedPairs({ rows, loading }) {
           {rows.map((row) => (
             <li key={row.kalshi_id + ":" + row.polymarket_id}>
               <dl className="pair-venues">
-                <div><dt>Kalshi</dt><dd>{row.kalshi_title}</dd></div>
-                <div><dt>{polymarketLabel(row.polymarket_venue)}</dt><dd>{row.polymarket_url ? <a href={row.polymarket_url}>{row.polymarket_title}</a> : row.polymarket_title}</dd></div>
+                <div><dt>Kalshi</dt><dd><EventLink url={row.kalshi_url}>{row.kalshi_title}</EventLink></dd></div>
+                <div><dt>{polymarketLabel(row.polymarket_venue)}</dt><dd><EventLink url={row.polymarket_url}>{row.polymarket_title}</EventLink></dd></div>
               </dl>
               <p className="quote-time">First close <CloseTime value={row.closes_at} /></p>
               {row.capital_until && row.capital_until !== row.closes_at &&
@@ -150,8 +157,8 @@ function CancellationDifferences({ rows }) {
               <h3 className="opportunity-name">{row.title}</h3>
               {row.polymarket_title !== row.title && <p className="muted">{row.polymarket_title}</p>}
               <dl className="quote-stats cancellation-payouts">
-                <div><dt>Kalshi</dt><dd>{payouts[row.kalshi_cancellation] ?? row.kalshi_cancellation}</dd></div>
-                <div><dt>{polymarketLabel(row.polymarket_venue)}</dt><dd>{payouts[row.polymarket_cancellation] ?? row.polymarket_cancellation}</dd></div>
+                <div><dt><EventLink url={row.kalshi_url}>Kalshi</EventLink></dt><dd>{payouts[row.kalshi_cancellation] ?? row.kalshi_cancellation}</dd></div>
+                <div><dt><EventLink url={row.polymarket_url}>{polymarketLabel(row.polymarket_venue)}</EventLink></dt><dd>{payouts[row.polymarket_cancellation] ?? row.polymarket_cancellation}</dd></div>
               </dl>
               <a className="quote-time" href={row.rulebook}>Governing rules</a>
             </li>
@@ -195,13 +202,13 @@ function SharedEventPair({ row }) {
       <p className="rule-scenario">{row.difference.scenario}</p>
       <dl className="rule-comparison">
         {[
-          { label: "Kalshi", close: row.kalshi_close, book: row.kalshi_rulebook, payout: row.difference.kalshi_payout,
+          { label: "Kalshi", url: row.kalshi_url, close: row.kalshi_close, book: row.kalshi_rulebook, payout: row.difference.kalshi_payout,
             cutoff: row.difference.kalshi_cutoff, inclusive: row.difference.kalshi_cutoff_inclusive },
           { label: polymarketLabel(row.polymarket_venue), url: row.polymarket_url, close: row.polymarket_close, book: row.polymarket_rulebook,
             payout: row.difference.polymarket_payout, cutoff: row.difference.polymarket_cutoff, inclusive: row.difference.polymarket_cutoff_inclusive },
         ].map(({ label, url, close, book, payout, cutoff, inclusive }) => (
           <div key={label}>
-            <dt>{url ? <a href={url}>{label}</a> : label}</dt>
+            <dt><EventLink url={url}>{label}</EventLink></dt>
             <dd>{payout}{payout === "Yes" || payout === "No" ? " pays $1" : ""}</dd>
             {cutoff && <dd className="quote-time">Rule deadline {inclusive ? "by" : "before"} <time dateTime={cutoff}>{ruleDate.format(new Date(cutoff))}</time></dd>}
             <dd className="quote-time">Trading closes <CloseTime value={close} /></dd>
