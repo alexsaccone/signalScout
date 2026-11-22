@@ -228,6 +228,11 @@ const aiVerdicts = {
   insufficient_evidence: "Insufficient evidence",
 };
 
+const aiModels = {
+  "gemini-4-hydrogen": "Gemini 4 Hydrogen",
+  "gemini-3.6-flash": "Gemini 3.6 Flash",
+};
+
 function AIReviewedPairs({ rows, loading }) {
   return (
     <section aria-labelledby="ai-reviewed-heading">
@@ -237,7 +242,10 @@ function AIReviewedPairs({ rows, loading }) {
         <ul className="opportunity-list">
           {rows.map((row) => (
             <li key={row.kalshi_id + ":" + row.polymarket_id}>
-              <h3 className="opportunity-name">{aiVerdicts[row.verdict]}</h3>
+              <div className="quote-heading">
+                <h3 className="opportunity-name">{aiVerdicts[row.verdict]}</h3>
+                {row.review_model && <p className="quote-time">{aiModels[row.review_model] ?? row.review_model}</p>}
+              </div>
               <dl className="pair-venues">
                 <div><dt>Kalshi</dt><dd><EventLink url={row.kalshi_url}>{row.kalshi_title}</EventLink></dd></div>
                 <div><dt>{polymarketLabel(row.polymarket_venue)}</dt><dd><EventLink url={row.polymarket_url}>{row.polymarket_title}</EventLink></dd></div>

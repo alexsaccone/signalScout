@@ -20,7 +20,9 @@ from .ai_filter import atomic_write
 from .settlement_documents import rulebook_body
 
 
-MODEL = "gemini-4-hydrogen"
+PRIMARY_MODEL = "gemini-4-hydrogen"
+FALLBACK_MODEL = "gemini-3.6-flash"
+MODELS = (PRIMARY_MODEL, FALLBACK_MODEL)
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
 REVISION = "2026-05-20"
 RUN_LIMIT = 30
@@ -116,12 +118,12 @@ def valid_review(result, sources):
     return verdict == "insufficient_evidence" or cited_venues == set(VENUES)
 
 
-def review_with_gemini(key, parts):
+def review_with_gemini(key, parts, model=PRIMARY_MODEL):
     response = requests.post(
         ENDPOINT,
         headers={"x-goog-api-key": key, "Api-Revision": REVISION},
         json={
-            "model": MODEL, "store": False, "system_instruction": INSTRUCTION,
+            "model": model, "store": False, "system_instruction": INSTRUCTION,
             "input": parts, "generation_config": {"thinking_level": "low", "max_output_tokens": 4096},
             "response_format": {"type": "text", "mime_type": "application/json", "schema": SCHEMA},
         },
@@ -129,7 +131,10 @@ def review_with_gemini(key, parts):
         timeout=(5, 90),
     )
     if response.status_code != 200:
-        return None, ("quota_exhausted" if response.status_code == 429 else f"api_http_{response.status_code}")
+        delay = response.headers.get("Retry-After", "")
+        retry_after = int(delay) if delay.isascii() and delay.isdecimal() and len(delay) <= 9 else 0
+        failure = "quota_exhausted" if response.status_code == 429 else f"api_http_{response.status_code}"
+        return None, failure, retry_after
     try:
         data = response.json()
         if data["status"] == "completed":
@@ -137,83 +142,132 @@ def review_with_gemini(key, parts):
                 part["text"] for step in data["steps"] if step["type"] == "model_output"
                 for part in step["content"] if part["type"] == "text"
             ]
-            return json.loads("".join(output)), None
+            return json.loads("".join(output)), None, 0
     except (KeyError, TypeError, ValueError):
         pass
-    return None, "invalid_response"
+    return None, "invalid_response", 0
+
+
+def review_input(evidence, prompt):
+    parts = [{"type": "text", "text": prompt}]
+    sources = {}
+    for venue, doc in evidence.items():
+        terms = doc["terms"]
+        sources[venue] = (compact(f"{terms['rules']} {terms['secondary_rules']}"),)
+        if doc["rulebook"]:
+            loaded = document(doc["rulebook"], doc["sha256"])
+            if loaded is None:
+                raise ValueError("Rulebook is unavailable or changed since discovery")
+            pdf, pages = loaded
+            sources[venue] += pages
+            parts.extend([
+                {"type": "text", "text": f"Governing PDF for {venue}"},
+                {"type": "document", "mime_type": "application/pdf", "data": pdf},
+            ])
+    return parts, sources
 
 
 def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
-    output, pending = [], []
-    attempts = 0
-    consecutive_failures = 0
-    stopped = None if key else "missing_api_key"
+    output, pending, upgrades = [], [], []
+    attempts = Counter()
+    consecutive_failures = Counter()
+    stopped, retry_at = {}, {}
     deadline = monotonic() + 360
-    for row in assessment["manual_review"]:
-        evidence = evidence_for(row)
-        data = {"reason": row["reason"], "polymarket_source": row["evidence"].get("polymarket_source"),
-                "venues": evidence}
-        prompt = json.dumps(data, ensure_ascii=False, sort_keys=True)
-        fingerprint = sha256(json.dumps([MODEL, REVISION, INSTRUCTION, SCHEMA, prompt]).encode()).hexdigest()
-        result = {
-            "kalshi_id": evidence["kalshi"]["terms"]["id"],
-            "polymarket_id": evidence["polymarket"]["terms"]["id"],
-            "event_title": row.get("event_title"),
-            "reason": row["reason"], "fingerprint": fingerprint,
-            "sources": {venue: {key: doc[key] for key in ("rulebook", "sha256")} for venue, doc in evidence.items()},
-        }
-        output.append(result)
-        cached = cache.get(fingerprint, {})
-        if "review" in cached:
-            result.update(status="cached", review=cached["review"])
-        else:
-            pending.append((cached.get("attempted_at", 0), result, evidence, prompt))
-    for _, result, evidence, prompt in sorted(pending, key=lambda entry: entry[0]):
-        if stopped or attempts >= limit or monotonic() > deadline:
-            result["status"] = stopped or "deferred"
-            continue
-        parts = [{"type": "text", "text": prompt}]
-        sources = {}
-        try:
-            for venue, doc in evidence.items():
-                terms = doc["terms"]
-                sources[venue] = (compact(f"{terms['rules']} {terms['secondary_rules']}"),)
-                if doc["rulebook"]:
-                    pdf, pages = document(doc["rulebook"], doc["sha256"]) or (None, ())
-                    if pdf is None:
-                        raise ValueError("Rulebook is unavailable or changed since discovery")
-                    sources[venue] += pages
-                    parts.extend([
-                        {"type": "text", "text": f"Governing PDF for {venue}"},
-                        {"type": "document", "mime_type": "application/pdf", "data": pdf},
-                    ])
-        except (requests.RequestException, PdfReadError, ValueError, OSError):
-            result["status"] = "rulebook_unavailable"
-            continue
+
+    def show_review(result, model, fingerprint, review, status):
+        result.update(status=status, review=review, review_model=model, fingerprint=fingerprint)
+
+    def unavailable(model):
+        if not key:
+            return "missing_api_key"
+        if model in stopped:
+            return stopped[model]
+        if attempts.total() >= limit or monotonic() >= deadline:
+            return "deferred"
+        if monotonic() < retry_at.get(model, 0):
+            return "model_cooldown"
+
+    def attempt_review(model, fingerprint, parts, sources):
         if attempts:
             sleep(pause)
-        attempts += 1
-        fingerprint = result["fingerprint"]
+        attempts[model] += 1
         cache.pop(fingerprint, None)
-        cache[fingerprint] = {"attempted_at": time()}
+        cache[fingerprint] = {"model": model, "attempted_at": time()}
+        delay = 0
         try:
-            review, failure = review_with_gemini(key, parts)
+            review, failure, delay = review_with_gemini(key, parts, model)
         except requests.Timeout:
             review, failure = None, "api_timeout"
         except requests.RequestException:
             review, failure = None, "api_unavailable"
         temporary = failure and (failure in {"api_timeout", "api_unavailable"} or failure.startswith("api_http_5"))
-        consecutive_failures = consecutive_failures + 1 if temporary else 0
+        consecutive_failures[model] = consecutive_failures[model] + 1 if temporary else 0
         if failure:
-            result["status"] = failure
-            if consecutive_failures >= MAX_CONSECUTIVE_API_FAILURES or (not temporary and failure != "invalid_response"):
-                stopped = failure
-        elif valid_review(review, sources):
-            cache[fingerprint]["review"] = review
-            result.update(status="reviewed", review=review)
+            if temporary and delay:
+                retry_at[model] = monotonic() + delay
+            if consecutive_failures[model] >= MAX_CONSECUTIVE_API_FAILURES or (not temporary and failure != "invalid_response"):
+                stopped[model] = failure
+            return None, failure
+        if not valid_review(review, sources):
+            return None, "unsupported_review"
+        cache[fingerprint]["review"] = review
+        return review, None
+
+    for row in assessment["manual_review"]:
+        evidence = evidence_for(row)
+        data = {"reason": row["reason"], "polymarket_source": row["evidence"].get("polymarket_source"),
+                "venues": evidence}
+        prompt = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        fingerprints = {model: sha256(json.dumps([model, REVISION, INSTRUCTION, SCHEMA, prompt]).encode()).hexdigest()
+                        for model in MODELS}
+        cached = {model: cache.get(fingerprint, {}) for model, fingerprint in fingerprints.items()}
+        result = {
+            "kalshi_id": evidence["kalshi"]["terms"]["id"],
+            "polymarket_id": evidence["polymarket"]["terms"]["id"],
+            "event_title": row.get("event_title"),
+            "reason": row["reason"], "fingerprint": fingerprints[PRIMARY_MODEL],
+            "sources": {venue: {key: doc[key] for key in ("rulebook", "sha256")} for venue, doc in evidence.items()},
+        }
+        output.append(result)
+        candidate = (result, evidence, prompt, fingerprints)
+        if "review" in cached[PRIMARY_MODEL]:
+            show_review(result, PRIMARY_MODEL, fingerprints[PRIMARY_MODEL], cached[PRIMARY_MODEL]["review"], "cached")
+        elif "review" in cached[FALLBACK_MODEL]:
+            show_review(result, FALLBACK_MODEL, fingerprints[FALLBACK_MODEL], cached[FALLBACK_MODEL]["review"], "cached")
+            upgrades.append((cached[PRIMARY_MODEL].get("attempted_at", 0), *candidate))
         else:
-            result["status"] = "unsupported_review"
-    return {"model": MODEL, "assessment_at": assessment["generated_at"], "api_attempts": attempts,
+            pending.append((max(entry.get("attempted_at", 0) for entry in cached.values()), *candidate))
+
+    for queue, models in ((pending, MODELS), (upgrades, (PRIMARY_MODEL,))):
+        if queue is upgrades and any("review" not in result for _, result, *_ in pending):
+            break
+        for _, result, evidence, prompt, fingerprints in sorted(queue, key=lambda entry: entry[0]):
+            review_data = None
+            failure = None
+            for model in models:
+                if reason := unavailable(model):
+                    failure = failure or reason
+                    continue
+                if review_data is None:
+                    try:
+                        review_data = review_input(evidence, prompt)
+                    except (requests.RequestException, PdfReadError, ValueError, OSError):
+                        failure = "rulebook_unavailable"
+                        break
+                fingerprint = fingerprints[model]
+                review, failure = attempt_review(model, fingerprint, *review_data)
+                if review is not None:
+                    show_review(result, model, fingerprint, review, "reviewed")
+                    break
+            if failure and queue is upgrades:
+                # The selected Flash review stays visible if a Hydrogen recheck fails.
+                result["hydrogen_recheck_status"] = failure
+            if "review" not in result:
+                result["status"] = failure or "deferred"
+    return {"model": PRIMARY_MODEL, "fallback_model": FALLBACK_MODEL,
+            "assessment_at": assessment["generated_at"], "api_attempts": attempts.total(),
+            "api_attempts_by_model": dict(attempts),
+            "review_counts_by_model": dict(Counter(row["review_model"] for row in output if "review_model" in row)),
             "counts": dict(Counter(row["status"] for row in output)), "reviews": output}
 
 
@@ -239,6 +293,7 @@ def main():
         recent = dict(list(cache.items())[-4096:])
         atomic_write(args.cache, lambda file: json.dump(recent, file))
     print(f"Gemini settlement review made {report['api_attempts']} API calls. Status counts: {report['counts']}")
+    print(f"Gemini calls by model: {report['api_attempts_by_model']}. Reviews by model: {report['review_counts_by_model']}")
 
 
 if __name__ == "__main__":

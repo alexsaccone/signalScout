@@ -25,8 +25,11 @@ class DashboardTest(unittest.TestCase):
                      "kalshi_event_id": "KXTEST-EVENT", "polymarket_event_url": "https://polymarket.us/event/test-event"}
         assessment = {"generated_at": stamp, "manual_review": [candidate]}
         suggestion = {"kalshi_id": left["id"], "polymarket_id": right["id"], "status": "cached",
+                      "review_model": "gemini-3.6-flash",
                       "review": {"verdict": "likely_equivalent", "summary": "Both use the same criteria.", "quotes": []}}
-        ai_report = {"assessment_at": stamp, "reviews": [suggestion]}
+        ai_report = {"model": "gemini-4-hydrogen", "assessment_at": stamp, "reviews": [suggestion]}
+        legacy = dict(ai_report, reviews=[{key: value for key, value in suggestion.items() if key != "review_model"}])
+        self.assertEqual(ai_review_rows(assessment, legacy)[0]["review_model"], "gemini-4-hydrogen")
         self.assertEqual(ai_review_rows(assessment, dict(ai_report, assessment_at="old")), [])
         self.assertEqual(ai_review_rows(assessment, dict(ai_report, reviews=[dict(suggestion, status="unsupported_review")])), [])
         with TemporaryDirectory() as folder, mock.patch("src.Arbitrage.dashboard.live_games", return_value=[]), mock.patch(
@@ -40,6 +43,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(row["closes_at"], right["close_time"])
         self.assertEqual(row["polymarket_url"], candidate["polymarket_event_url"])
         self.assertEqual(row["verdict"], "likely_equivalent")
+        self.assertEqual(row["review_model"], "gemini-3.6-flash")
         self.assertEqual(snapshot["matched_pairs"], [])
         self.assertEqual(price.call_args.args[0], [])
 

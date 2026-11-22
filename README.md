@@ -34,9 +34,10 @@ unfamiliar, or inconclusive evidence goes to manual review. Resolution checks
 run in Python against public venue APIs. A rule that explicitly includes the
 full 11:59 p.m. minute can match a rule that ends immediately before midnight
 the next day in the same time zone. Ambiguous cutoff wording goes to review
-when paired. A separate job uses Gemini 4 Hydrogen to triage manual-review pairs
-when `GEMINI_API_KEY` is configured. The **AI-reviewed** Markets tab shows
-suggested verdicts and supporting quotes for open pairs. The
+when paired. A separate job triages manual-review pairs with Gemini 4 Hydrogen
+and Gemini 3.6 Flash as a fallback when `GEMINI_API_KEY` is configured. The
+**AI-reviewed** Markets tab shows the model, suggested verdict and supporting
+quotes for open pairs. The
 **settlement-ai-review** artifact includes any pairs awaiting an AI response.
 Pricing still requires the existing verification or human approval.
 [Setup and quotas](docs/settlement-ai-review.md)
