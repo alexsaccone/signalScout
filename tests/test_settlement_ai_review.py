@@ -155,6 +155,30 @@ class SettlementAIReviewTest(unittest.TestCase):
         self.assertEqual([row["review_model"] for row in second["reviews"]], [FALLBACK_MODEL] * 2)
         self.assertEqual([row["hydrogen_recheck_status"] for row in second["reviews"]], ["quota_exhausted"] * 2)
 
+    @patch("src.Arbitrage.settlement_ai_review.document", return_value=("PDF", (KALSHI_QUOTE,)))
+    @patch("src.Arbitrage.settlement_ai_review.review_with_gemini")
+    def test_joint_cooldown_waits_for_the_first_available_model(self, gemini, _):
+        report = assessment()
+        other = deepcopy(report["manual_review"][0])
+        other["pair"]["polymarket"]["id"] = "next-pair"
+        report["manual_review"].append(other)
+        gemini.side_effect = [(None, "api_http_503", 30), (None, "api_http_503", 20), (DIFFERENCE, None, 0)]
+        tick = 10
+
+        def advance(seconds):
+            nonlocal tick
+            tick += seconds
+
+        with patch("src.Arbitrage.settlement_ai_review.monotonic", side_effect=lambda: tick), patch(
+            "src.Arbitrage.settlement_ai_review.sleep", side_effect=advance
+        ) as wait:
+            result = review_queue(report, {}, "test-key", pause=0)
+
+        wait.assert_any_call(20)
+        self.assertEqual(result["api_attempts_by_model"], {PRIMARY_MODEL: 1, FALLBACK_MODEL: 2})
+        self.assertEqual([row["status"] for row in result["reviews"]], ["api_http_503", "reviewed"])
+        self.assertEqual(result["reviews"][1]["review_model"], FALLBACK_MODEL)
+
     @patch("src.Arbitrage.settlement_ai_review.requests.post")
     def test_gemini_request_and_parse_completed_response(self, post):
         reply = post.return_value
