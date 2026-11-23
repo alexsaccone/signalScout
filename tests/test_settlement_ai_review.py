@@ -85,15 +85,25 @@ class SettlementAIReviewTest(unittest.TestCase):
 
     @patch("src.Arbitrage.settlement_ai_review.document", return_value=("PDF", (KALSHI_QUOTE,)))
     @patch("src.Arbitrage.settlement_ai_review.review_with_gemini")
-    def test_timeout_falls_back_and_the_next_pair_tries_hydrogen(self, gemini, _):
+    def test_timeout_falls_back_and_hydrogen_resumes_when_ready(self, gemini, _):
         report = assessment()
         other = deepcopy(report["manual_review"][0])
         other["pair"]["polymarket"]["id"] = "next-pair"
         report["manual_review"].append(other)
-        gemini.side_effect = [requests.ReadTimeout(), (DIFFERENCE, None, 0), (DIFFERENCE, None, 0)]
         cache = {}
+        tick = 0
 
-        result = review_queue(report, cache, "test-key", pause=0)
+        def respond(_key, _parts, model):
+            nonlocal tick
+            if gemini.call_count == 1:
+                raise requests.ReadTimeout()
+            if model == FALLBACK_MODEL:
+                tick += 20
+            return DIFFERENCE, None, 0
+
+        gemini.side_effect = respond
+        with patch("src.Arbitrage.settlement_ai_review.monotonic", side_effect=lambda: tick):
+            result = review_queue(report, cache, "test-key", pause=0)
 
         self.assertEqual(result["api_attempts"], 3)
         self.assertEqual(result["counts"], {"reviewed": 2})
@@ -199,6 +209,40 @@ class SettlementAIReviewTest(unittest.TestCase):
         reply.status_code = 503
         reply.headers = {"Retry-After": "30"}
         self.assertEqual(review_with_gemini("test-key", []), (None, "api_http_503", 30))
+
+    @patch("src.Arbitrage.settlement_ai_review.document", return_value=("PDF", (KALSHI_QUOTE,)))
+    @patch("src.Arbitrage.settlement_ai_review.review_with_gemini")
+    def test_resumes_after_three_transient_failures_per_model(self, gemini, _):
+        report = assessment()
+        for number in range(1, 8):
+            other = deepcopy(report["manual_review"][0])
+            other["pair"]["polymarket"]["id"] = f"pair-{number}"
+            report["manual_review"].append(other)
+        calls = {PRIMARY_MODEL: 0, FALLBACK_MODEL: 0}
+        tick = 0
+
+        def respond(_key, _parts, model):
+            calls[model] += 1
+            if calls[model] <= 3:
+                return None, "api_http_503", 0
+            return DIFFERENCE, None, 0
+
+        def advance(seconds):
+            nonlocal tick
+            tick += seconds
+
+        gemini.side_effect = respond
+        with patch("src.Arbitrage.settlement_ai_review.monotonic", side_effect=lambda: tick), patch(
+            "src.Arbitrage.settlement_ai_review.sleep", side_effect=advance
+        ):
+            result = review_queue(report, {}, "test-key", limit=8, pause=0)
+
+        self.assertEqual(result["counts"].get("reviewed"), 2)
+        self.assertEqual(result["api_attempts"], 8)
+        self.assertGreaterEqual(tick, 60)
+        self.assertLess(tick, 360)
+        self.assertEqual(sum(outcomes.get("api_http_503", 0) for outcomes in
+                             result["api_outcomes_by_model"].values()), 6)
 
 
 if __name__ == "__main__":

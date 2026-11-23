@@ -36,16 +36,18 @@ equivalent pairs through [`data/reviewed_pairs.json`](../data/reviewed_pairs.jso
 
 ## Quotas and cache
 
-The job makes up to 30 total requests per run. Quota and temporary outages are
-handled for each model. Pairs with no previous attempt receive priority over
+The job makes up to 30 total requests per run. Each model backs off after
+temporary failures and can resume within the review time budget. An exhausted
+quota stops calls to that model for the run. Pairs with no previous attempt receive priority over
 failed attempts. Once every pair in the current manual-review queue has an AI
 result, remaining capacity goes to Hydrogen rechecks of earlier Flash reviews.
 A successful Hydrogen recheck becomes the selected verdict. Both models'
 validated results stay in the cache under separate fingerprints.
 
 Cached results can be reused while the prompt, market terms and document hashes
-match. Unreviewed pairs carry forward when rediscovered. The artifact records
-requests and selected results by model. Google's free quota is project-specific,
+match. Unreviewed pairs carry forward when rediscovered. The artifact and run
+summary report actual request outcomes by model separately from pair statuses.
+Google's free quota is project-specific,
 so the number of new pairs reviewed per day can vary.
 [Gemini API rate limits](https://aistudio.google.com/docs/rate-limits)
 

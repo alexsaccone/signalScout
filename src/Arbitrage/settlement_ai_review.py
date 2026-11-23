@@ -26,7 +26,7 @@ MODELS = (PRIMARY_MODEL, FALLBACK_MODEL)
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
 REVISION = "2026-05-20"
 RUN_LIMIT = 30
-MAX_CONSECUTIVE_API_FAILURES = 3
+RETRY_DELAYS = (15, 30, 60)
 VENUES = ("kalshi", "polymarket")
 VERDICTS = ("likely_equivalent", "cancellation_only", "different_rules", "insufficient_evidence")
 NEEDS_FULL_TERMS = {"likely_equivalent", "cancellation_only"}
@@ -170,6 +170,7 @@ def review_input(evidence, prompt):
 def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
     output, pending, upgrades = [], [], []
     attempts = Counter()
+    outcomes = {model: Counter() for model in MODELS}
     consecutive_failures = Counter()
     stopped, retry_at = {}, {}
     deadline = monotonic() + 360
@@ -203,13 +204,17 @@ def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
         temporary = failure and (failure in {"api_timeout", "api_unavailable"} or failure.startswith("api_http_5"))
         consecutive_failures[model] = consecutive_failures[model] + 1 if temporary else 0
         if failure:
-            if temporary and delay:
-                retry_at[model] = monotonic() + delay
-            if consecutive_failures[model] >= MAX_CONSECUTIVE_API_FAILURES or (not temporary and failure != "invalid_response"):
+            outcomes[model][failure] += 1
+            if temporary:
+                backoff = RETRY_DELAYS[min(consecutive_failures[model], len(RETRY_DELAYS)) - 1]
+                retry_at[model] = monotonic() + max(backoff, delay)
+            elif failure != "invalid_response":
                 stopped[model] = failure
             return None, failure
         if not valid_review(review, sources):
+            outcomes[model]["unsupported_review"] += 1
             return None, "unsupported_review"
+        outcomes[model]["reviewed"] += 1
         cache[fingerprint]["review"] = review
         return review, None
 
@@ -273,6 +278,7 @@ def review_queue(assessment, cache, key, limit=RUN_LIMIT, pause=6):
     return {"model": PRIMARY_MODEL, "fallback_model": FALLBACK_MODEL,
             "assessment_at": assessment["generated_at"], "api_attempts": attempts.total(),
             "api_attempts_by_model": dict(attempts),
+            "api_outcomes_by_model": {model: dict(counts) for model, counts in outcomes.items() if counts},
             "review_counts_by_model": dict(Counter(row["review_model"] for row in output if "review_model" in row)),
             "counts": dict(Counter(row["status"] for row in output)), "reviews": output}
 
@@ -299,7 +305,8 @@ def main():
         recent = dict(list(cache.items())[-4096:])
         atomic_write(args.cache, lambda file: json.dump(recent, file))
     print(f"Gemini settlement review made {report['api_attempts']} API calls. Status counts: {report['counts']}")
-    print(f"Gemini calls by model: {report['api_attempts_by_model']}. Reviews by model: {report['review_counts_by_model']}")
+    print(f"Gemini request outcomes by model: {report['api_outcomes_by_model']}")
+    print(f"Selected reviews by model: {report['review_counts_by_model']}")
 
 
 if __name__ == "__main__":
