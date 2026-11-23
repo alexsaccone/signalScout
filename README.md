@@ -8,7 +8,8 @@ for reviewed contract pairs and documented settlement differences. The
 Polymarket moneyline odds.
 **Matched pairs** lists all open verified pairs, including pairs without a
 profitable quote.
-The GitHub Actions workflow refreshes the snapshot roughly every two hours.
+GitHub Actions schedules a refresh every two hours, with a backup trigger
+30 minutes later if Pages has not published in the last 90 minutes.
 Select **Refresh data** to check for the latest published snapshot. The dashboard
 shows when it finished checking and keeps the last loaded data if a check fails.
 A failed run leaves the previous snapshot online, with its original update
