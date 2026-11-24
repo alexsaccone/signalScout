@@ -82,6 +82,7 @@ jobs:
 
   ai-review:
     needs: settlement-review
+    if: ${{ !cancelled() && needs.settlement-review.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -167,6 +168,7 @@ jobs:
 
   deploy:
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write
